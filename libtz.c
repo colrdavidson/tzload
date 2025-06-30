@@ -1005,32 +1005,34 @@ TZ_Time tz_time_new(int64_t time) {
 	return (TZ_Time){.time = time, .tz = NULL};
 }
 
-TZ_Time tz_time_to_utc(TZ_Time dt) {
-	if (dt.tz == NULL) {
-		return dt;
+TZ_Time tz_time_to_utc(TZ_Time t) {
+	if (t.tz == NULL) {
+		return t;
 	}
 
-	TZ_Record record = region_get_nearest(dt.tz, dt.time);
-	int64_t adj_time = dt.time - record.utc_offset;
-	return (TZ_Time){.time = adj_time, .tz = NULL};
+	TZ_Record record = region_get_nearest(t.tz, t.time);
+	return (TZ_Time){.time = t.time - record.utc_offset, .tz = NULL};
 }
 
-TZ_Time tz_time_to_tz(TZ_Time in_dt, TZ_Region *tz) {
-	TZ_Time dt = in_dt;
-	if (dt.tz == tz) {
-		return dt;
+int64_t tz_time_to_unix_seconds(TZ_Time t) {
+	TZ_Time out_t = tz_time_to_utc(t);
+	return out_t.time;
+}
+
+TZ_Time tz_time_to_tz(TZ_Time in_t, TZ_Region *tz) {
+	TZ_Time t = in_t;
+	if (t.tz == tz) {
+		return t;
 	}
-	if (dt.tz != NULL) {
-		dt = tz_time_to_utc(dt);
+	if (t.tz != NULL) {
+		t = tz_time_to_utc(t);
 	}
 	if (tz == NULL) {
-		return dt;
+		return t;
 	}
 
-	TZ_Record record = region_get_nearest(tz, dt.time);
-
-	int64_t adj_time = dt.time + record.utc_offset;
-	return (TZ_Time){.time = adj_time, .tz = tz};
+	TZ_Record record = region_get_nearest(tz, t.time);
+	return (TZ_Time){.time = t.time + record.utc_offset, .tz = tz};
 }
 
 char *tz_shortname(TZ_Time t) {
