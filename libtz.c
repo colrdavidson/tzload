@@ -9,11 +9,79 @@
 
 #include "libtz.h"
 
+// UTILITIES
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
-#define TZIF_MAGIC 0x545A6966
-#define BIG_BANG_ISH -0x800000000000000ll
-#define TWO_AM 2 * 60 * 60
 
+typedef struct {
+	uint8_t *data;
+	uint64_t len;
+} Slice;
+
+static Slice slice_sub(Slice s, uint64_t start_idx) {
+	return (Slice){.data = s.data + start_idx, .len = s.len - start_idx};
+}
+
+typedef struct {
+	char **strs;
+	uint64_t len;
+	uint64_t cap;
+} DynArr;
+
+static void dynarr_append(DynArr *dyn, char *str) {
+	if (dyn->len + 1 > dyn->cap) {
+		dyn->cap = MAX(8, dyn->cap * 2);
+		dyn->strs = (char **)realloc(dyn->strs, sizeof(char *) * dyn->cap);
+	}
+	dyn->strs[dyn->len] = str;
+	dyn->len += 1;
+}
+
+static bool load_entire_file(char *path, uint8_t **out_buf, size_t *len) {
+	int fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		return false;
+	}
+
+	uint64_t file_length = lseek(fd, 0, SEEK_END);
+	lseek(fd, 0, SEEK_SET);
+
+	uint8_t *buffer = (uint8_t *)malloc(file_length);
+	read(fd, buffer, file_length);
+
+	close(fd);
+
+	*out_buf = buffer;
+	*len = file_length;
+	return true;
+}
+
+static bool is_whitespace(uint8_t ch) {
+	return (ch == ' ' || ch == '\n' || ch == '\t' || ch == '\r');
+}
+
+static bool is_alphabetic(uint8_t ch) {
+	//     ('A'   ->    'Z')        || ('a'    ->    'z')
+	return (ch > 0x40 && ch < 0x5B) || (ch > 0x60 && ch < 0x7B);
+}
+
+static bool is_numeric(uint8_t ch) {
+	//     ('0'   ->    '9')
+	return (ch > 0x2f && ch < 0x3A);
+}
+
+static bool parse_i64(char *str, int64_t *val, int64_t *len) {
+	char *endptr = NULL;
+	int64_t ret = strtoll(str, &endptr, 10);
+	if (ret == 0 && errno == EINVAL) {
+		return false;
+	}
+
+	*val = ret;
+	*len = endptr - str;
+	return true;
+}
+
+// TIME MATH
 #define SECONDS_PER_MINUTE 60
 #define SECONDS_PER_HOUR (60 * SECONDS_PER_MINUTE)
 #define SECONDS_PER_DAY (24 * SECONDS_PER_HOUR)
@@ -29,14 +97,70 @@
 #define UNIX_TO_INTERNAL ((int64_t)((1969 * 365) + (1969 / 4) - (1969 / 100) + (1969 / 400)) * SECONDS_PER_DAY)
 #define UNIX_TO_ABSOLUTE (UNIX_TO_INTERNAL + INTERNAL_TO_ABSOLUTE)
 
-typedef struct {
-	uint8_t *data;
-	uint64_t len;
-} Slice;
+static int32_t days_before[] = {
+    0,
+    31,
+    31 + 28,
+    31 + 28 + 31,
+    31 + 28 + 31 + 30,
+    31 + 28 + 31 + 30 + 31,
+    31 + 28 + 31 + 30 + 31 + 30,
+    31 + 28 + 31 + 30 + 31 + 30 + 31,
+    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31,
+    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30,
+    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31,
+    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 + 30,
+    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 + 30 + 31,
+};
 
-static Slice slice_sub(Slice s, uint64_t start_idx) {
-	return (Slice){.data = s.data + start_idx, .len = s.len - start_idx};
+static int64_t month_to_seconds(int64_t month, bool is_leap) {
+	int64_t month_seconds[] = {
+		0,                      31 * SECONDS_PER_DAY,  59 * SECONDS_PER_DAY,  90 * SECONDS_PER_DAY,
+		120 * SECONDS_PER_DAY, 151 * SECONDS_PER_DAY, 181 * SECONDS_PER_DAY, 212 * SECONDS_PER_DAY,
+		243 * SECONDS_PER_DAY, 273 * SECONDS_PER_DAY, 304 * SECONDS_PER_DAY, 334 * SECONDS_PER_DAY,
+	};
+
+	int64_t t = month_seconds[month];
+	if (is_leap && month >= 2) {
+		t += SECONDS_PER_DAY;
+	}
+
+	return t;
 }
+
+static bool is_leap_year(int64_t year) {
+	return year % 4 == 0 && ((year % 100) != 0 || (year % 400) == 0);
+}
+
+static int64_t leap_years_before(int64_t year) {
+	year -= 1;
+	return (year / 4) - (year / 100) + (year / 400);
+}
+
+static int64_t leap_years_between(int64_t start, int64_t end) {
+	return leap_years_before(end) - leap_years_before(start + 1);
+}
+
+static int64_t year_to_time(int64_t year) {
+	int64_t year_gap = year - 1970;
+	int64_t leap_count = leap_years_between(1970, year);
+	return ((year_gap * 365) + leap_count) * SECONDS_PER_DAY;
+}
+
+static int64_t last_day_of_month(int64_t year, int64_t month) {
+	int8_t month_days[] = {-1, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+	int64_t day = month_days[month];
+	if (month == 2 && is_leap_year(year)) {
+		day += 1;
+	}
+
+	return day;
+}
+
+// TZIF Parsing
+#define TZIF_MAGIC 0x545A6966
+#define BIG_BANG_ISH -0x800000000000000ll
+#define TWO_AM 2 * 60 * 60
 
 typedef enum {
 	V1 = 0,
@@ -103,20 +227,6 @@ static int tzif_data_block_size(TZif_Header *hdr, TZif_Version version) {
 		   hdr->isutcnt;
 }
 
-static bool is_whitespace(uint8_t ch) {
-	return (ch == ' ' || ch == '\n' || ch == '\t' || ch == '\r');
-}
-
-static bool is_alphabetic(uint8_t ch) {
-	//     ('A'   ->    'Z')        || ('a'    ->    'z')
-	return (ch > 0x40 && ch < 0x5B) || (ch > 0x60 && ch < 0x7B);
-}
-
-static bool is_numeric(uint8_t ch) {
-	//     ('0'   ->    '9')
-	return (ch > 0x2f && ch < 0x3A);
-}
-
 static bool is_valid_quoted_char(uint8_t ch) {
 	return is_alphabetic(ch) || is_numeric(ch) || ch == '+' || ch == '-';
 }
@@ -165,18 +275,6 @@ static bool parse_posix_tz_shortname(char *str, char **out, int64_t *idx) {
 		*idx = end_idx;
 	}
 
-	return true;
-}
-
-static bool parse_i64(char *str, int64_t *val, int64_t *len) {
-	char *endptr = NULL;
-	int64_t ret = strtoll(str, &endptr, 10);
-	if (ret == 0 && errno == EINVAL) {
-		return false;
-	}
-
-	*val = ret;
-	*len = endptr - str;
 	return true;
 }
 
@@ -592,40 +690,6 @@ bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out
 	return true;
 }
 
-typedef struct {
-	char **strs;
-	uint64_t len;
-	uint64_t cap;
-} DynArr;
-
-static void dynarr_append(DynArr *dyn, char *str) {
-	if (dyn->len + 1 > dyn->cap) {
-		dyn->cap = MAX(8, dyn->cap * 2);
-		dyn->strs = (char **)realloc(dyn->strs, sizeof(char *) * dyn->cap);
-	}
-	dyn->strs[dyn->len] = str;
-	dyn->len += 1;
-}
-
-static bool load_entire_file(char *path, uint8_t **out_buf, size_t *len) {
-	int fd = open(path, O_RDONLY);
-	if (fd < 0) {
-		return false;
-	}
-
-	uint64_t file_length = lseek(fd, 0, SEEK_END);
-	lseek(fd, 0, SEEK_SET);
-
-	uint8_t *buffer = (uint8_t *)malloc(file_length);
-	read(fd, buffer, file_length);
-
-	close(fd);
-
-	*out_buf = buffer;
-	*len = file_length;
-	return true;
-}
-
 static bool load_tzif_file(char *path, char *name, TZ_Region **region) {
 	uint8_t *buffer = NULL;
 	size_t file_length = 0;
@@ -637,6 +701,7 @@ static bool load_tzif_file(char *path, char *name, TZ_Region **region) {
 	return ret;
 }
 
+// TZ FUNCTIONS
 #if !defined(_WIN64) || !defined(_WIN32)
 static char *local_tz_name(bool check_env) {
 	if (check_env) {
@@ -769,41 +834,6 @@ void tz_region_destroy(TZ_Region *region) {
 	free(region);
 }
 
-static int32_t days_before[] = {
-    0,
-    31,
-    31 + 28,
-    31 + 28 + 31,
-    31 + 28 + 31 + 30,
-    31 + 28 + 31 + 30 + 31,
-    31 + 28 + 31 + 30 + 31 + 30,
-    31 + 28 + 31 + 30 + 31 + 30 + 31,
-    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31,
-    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30,
-    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31,
-    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 + 30,
-    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 + 30 + 31,
-};
-
-static int64_t month_to_seconds(int64_t month, bool is_leap) {
-	int64_t month_seconds[] = {
-		0,                      31 * SECONDS_PER_DAY,  59 * SECONDS_PER_DAY,  90 * SECONDS_PER_DAY,
-		120 * SECONDS_PER_DAY, 151 * SECONDS_PER_DAY, 181 * SECONDS_PER_DAY, 212 * SECONDS_PER_DAY,
-		243 * SECONDS_PER_DAY, 273 * SECONDS_PER_DAY, 304 * SECONDS_PER_DAY, 334 * SECONDS_PER_DAY,
-	};
-
-	int64_t t = month_seconds[month];
-	if (is_leap && month >= 2) {
-		t += SECONDS_PER_DAY;
-	}
-
-	return t;
-}
-
-static bool is_leap_year(int64_t year) {
-	return year % 4 == 0 && ((year % 100) != 0 || (year % 400) == 0);
-}
-
 TZ_Date tz_get_date(TZ_Time t) {
 	uint64_t abs = (uint64_t)(t.time + UNIX_TO_ABSOLUTE);
 	uint64_t d = abs / SECONDS_PER_DAY;
@@ -862,19 +892,6 @@ TZ_Date tz_get_date(TZ_Time t) {
 	};
 }
 
-static int64_t leap_years_before(int64_t year) {
-	year -= 1;
-	return (year / 4) - (year / 100) + (year / 400);
-}
-static int64_t leap_years_between(int64_t start, int64_t end) {
-	return leap_years_before(end) - leap_years_before(start + 1);
-}
-static int64_t year_to_time(int64_t year) {
-	int64_t year_gap = year - 1970;
-	int64_t leap_count = leap_years_between(1970, year);
-	return ((year_gap * 365) + leap_count) * SECONDS_PER_DAY;
-}
-
 TZ_HMS tz_get_hms(TZ_Time t) {
 	int64_t secs = (t.time + INTERNAL_TO_ABSOLUTE) % SECONDS_PER_DAY;
 
@@ -885,16 +902,6 @@ TZ_HMS tz_get_hms(TZ_Time t) {
 	secs -= mins * SECONDS_PER_MINUTE;
 
 	return (TZ_HMS){.hours = (int8_t)hours, .minutes = (int8_t)mins, .seconds = (int8_t)secs};
-}
-
-static int64_t last_day_of_month(int64_t year, int64_t month) {
-	int8_t month_days[] = {-1, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-	int64_t day = month_days[month];
-	if (month == 2 && is_leap_year(year)) {
-		day += 1;
-	}
-
-	return day;
 }
 
 static int64_t trans_date_to_seconds(int64_t year, TZ_Transition_Date td) {
