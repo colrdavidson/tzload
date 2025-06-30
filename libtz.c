@@ -14,8 +14,6 @@
 #define BIG_BANG_ISH -0x800000000000000ll
 #define TWO_AM 2 * 60 * 60
 
-#define DAY_SEC 86400
-
 #define SECONDS_PER_MINUTE 60
 #define SECONDS_PER_HOUR (60 * SECONDS_PER_MINUTE)
 #define SECONDS_PER_DAY (24 * SECONDS_PER_HOUR)
@@ -703,7 +701,7 @@ void tz_region_destroy(TZ_Region *region) {
 	free(region);
 }
 
-int32_t days_before[] = {
+static int32_t days_before[] = {
     0,
     31,
     31 + 28,
@@ -721,14 +719,14 @@ int32_t days_before[] = {
 
 static int64_t month_to_seconds(int64_t month, bool is_leap) {
 	int64_t month_seconds[] = {
-		0,              31 * DAY_SEC,  59 * DAY_SEC,  90 * DAY_SEC,
-		120 * DAY_SEC, 151 * DAY_SEC, 181 * DAY_SEC, 212 * DAY_SEC,
-		243 * DAY_SEC, 273 * DAY_SEC, 304 * DAY_SEC, 334 * DAY_SEC,
+		0,                      31 * SECONDS_PER_DAY,  59 * SECONDS_PER_DAY,  90 * SECONDS_PER_DAY,
+		120 * SECONDS_PER_DAY, 151 * SECONDS_PER_DAY, 181 * SECONDS_PER_DAY, 212 * SECONDS_PER_DAY,
+		243 * SECONDS_PER_DAY, 273 * SECONDS_PER_DAY, 304 * SECONDS_PER_DAY, 334 * SECONDS_PER_DAY,
 	};
 
 	int64_t t = month_seconds[month];
 	if (is_leap && month >= 2) {
-		t += DAY_SEC;
+		t += SECONDS_PER_DAY;
 	}
 
 	return t;
@@ -796,11 +794,6 @@ TZ_Date tz_get_date(TZ_Time t) {
 	};
 }
 
-static int64_t get_year(int64_t t) {
-	TZ_Date date = tz_get_date((TZ_Time){.time = t, .tz = NULL});
-	return date.year;
-}
-
 static int64_t leap_years_before(int64_t year) {
 	year -= 1;
 	return (year / 4) - (year / 100) + (year / 400);
@@ -808,7 +801,6 @@ static int64_t leap_years_before(int64_t year) {
 static int64_t leap_years_between(int64_t start, int64_t end) {
 	return leap_years_before(end) - leap_years_before(start + 1);
 }
-
 static int64_t year_to_time(int64_t year) {
 	int64_t year_gap = year - 1970;
 	int64_t leap_count = leap_years_between(1970, year);
@@ -846,7 +838,7 @@ static int64_t trans_date_to_seconds(int64_t year, TZ_Transition_Date td) {
 			if (td.month < 1) { return 0; }
 
 			t += month_to_seconds(td.month - 1, is_leap);
-			int64_t weekday = ((t + (4 * DAY_SEC)) % (7 * DAY_SEC)) / DAY_SEC;
+			int64_t weekday = ((t + (4 * SECONDS_PER_DAY)) % (7 * SECONDS_PER_DAY)) / SECONDS_PER_DAY;
 			int64_t days = td.day - weekday;
 
 			if (days < 0) { days += 7; }
@@ -857,7 +849,7 @@ static int64_t trans_date_to_seconds(int64_t year, TZ_Transition_Date td) {
 				week = 4;
 			}
 
-			t += DAY_SEC * (days + (7 * (week - 1)));
+			t += SECONDS_PER_DAY * (days + (7 * (week - 1)));
 			t += td.time;
 
 			return t;
@@ -867,11 +859,11 @@ static int64_t trans_date_to_seconds(int64_t year, TZ_Transition_Date td) {
 			if (day < 60 || !is_leap) {
 				day -= 1;
 			}
-			t += DAY_SEC * day;
+			t += SECONDS_PER_DAY * day;
 			return t;
 		} break;
 		case TZ_Leap: {
-			t += DAY_SEC * td.day;
+			t += SECONDS_PER_DAY * td.day;
 			return t;
 		} break;
 		default: { return 0; }
@@ -890,9 +882,9 @@ static TZ_Record process_rrule(TZ_RRule rrule, int64_t cur) {
 		};
 	}
 
-	int64_t year = get_year(cur);
-	int64_t std_secs = trans_date_to_seconds(year, rrule.std_date);
-	int64_t dst_secs = trans_date_to_seconds(year, rrule.dst_date);
+	TZ_Date date = tz_get_date((TZ_Time){.time = cur, .tz = NULL});
+	int64_t std_secs = trans_date_to_seconds(date.year, rrule.std_date);
+	int64_t dst_secs = trans_date_to_seconds(date.year, rrule.dst_date);
 
 	TZ_Record records[] = {
 		{
