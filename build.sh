@@ -1,1 +1,1 @@
-clang -o tzload main.c libtz.c
+clang -Os -Wall -o tzload main.c libtz.c

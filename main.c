@@ -39,9 +39,6 @@ bool rrule_eq(TZ_RRule a, TZ_RRule b) {
 }
 
 int main(int argc, char **argv) {
-	char *tzif_path = NULL;
-	char *tz_dir = "/usr/share/zoneinfo";
-
 	char *tz_name;
 	if (argc < 2) {
 		tz_name = "local";
@@ -50,13 +47,13 @@ int main(int argc, char **argv) {
 	}
 
 	TZ_Region *local_region = NULL;
-	if (!region_load(tz_name, &local_region)) {
+	if (!tz_region_load(tz_name, &local_region)) {
 		printf("Failed to load %s!\n", tz_name);
 		return 1;
 	}
 
 	TZ_Region *other_region = NULL;
-	if (!region_load("Asia/Tokyo", &other_region)) {
+	if (!tz_region_load("Asia/Tokyo", &other_region)) {
 		printf("Failed to load %s!\n", "Asia/Tokyo");
 		return 1;
 	}

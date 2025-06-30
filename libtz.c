@@ -36,25 +36,8 @@ typedef struct {
 	uint64_t len;
 } Slice;
 
-Slice slice_sub(Slice s, uint64_t start_idx) {
+static Slice slice_sub(Slice s, uint64_t start_idx) {
 	return (Slice){.data = s.data + start_idx, .len = s.len - start_idx};
-}
-
-void print_tz_record(TZ_Record record) {
-	printf("record:\n");
-	printf("- time:      %lld\n", record.time);
-	printf("- offset:    %lld\n", record.utc_offset);
-	printf("- shortname: %s\n", record.shortname);
-	printf("- dst?:      %s\n", record.dst ? "true" : "false");
-}
-
-void print_tz_region(TZ_Region *region) {
-	printf("Region: %s\n", region->name);
-	printf("records:\n");
-	for (int i = 0; i < region->record_count; i++) {
-		TZ_Record record = region->records[i];
-		print_tz_record(record);
-	}
 }
 
 typedef enum {
@@ -92,7 +75,7 @@ typedef struct __attribute__((packed)) {
 	uint8_t idx;
 } Local_Time_Type;
 
-void tzif_hdr_to_native(TZif_Header *hdr) {
+static void tzif_hdr_to_native(TZif_Header *hdr) {
 	hdr->magic = ntohl(hdr->magic);
 	hdr->isutcnt = ntohl(hdr->isutcnt);
 	hdr->isstdcnt = ntohl(hdr->isstdcnt);
@@ -102,18 +85,7 @@ void tzif_hdr_to_native(TZif_Header *hdr) {
 	hdr->charcnt = ntohl(hdr->charcnt);
 }
 
-void print_tzif_hdr(TZif_Header *hdr) {
-	printf("TZif_Header\n");
-	printf("- version:  %u\n", hdr->version);
-	printf("- isutcnt:  %u\n", hdr->isutcnt);
-	printf("- isstdcnt: %u\n", hdr->isstdcnt);
-	printf("- leapcnt:  %u\n", hdr->leapcnt);
-	printf("- timecnt:  %u\n", hdr->timecnt);
-	printf("- typecnt:  %u\n", hdr->typecnt);
-	printf("- charcnt:  %u\n", hdr->charcnt);
-}
-
-int tzif_data_block_size(TZif_Header *hdr, TZif_Version version) {
+static int tzif_data_block_size(TZif_Header *hdr, TZif_Version version) {
 	int time_size;
 
 	if (version == V1) {
@@ -141,10 +113,6 @@ static bool is_alphabetic(uint8_t ch) {
 static bool is_numeric(uint8_t ch) {
 	//     ('0'   ->    '9')
 	return (ch > 0x2f && ch < 0x3A);
-}
-
-static bool is_alphanumeric(uint8_t ch) {
-	return is_alphabetic(ch) || is_numeric(ch);
 }
 
 static bool is_valid_quoted_char(uint8_t ch) {
@@ -213,14 +181,11 @@ static bool parse_i64(char *str, int64_t *val, int64_t *len) {
 static bool parse_posix_tz_offset(char *str, int64_t *offset, int64_t *idx) {
 	int64_t sign = 1;
 	int start_idx = 0;
-	int i = 0;
 
 	if (*str == '+') {
-		i += 1;
 		sign = 1;
 		start_idx = 1;
 	} else if (*str == '-') {
-		i += 1;
 		sign = -1;
 		start_idx = 1;
 	}
@@ -365,7 +330,7 @@ static bool parse_posix_rrule(char *rrule_str, TZ_Transition_Date *date, int64_t
 	return false;
 }
 
-bool parse_posix_tz(char *posix_tz, TZ_RRule *rrule) {
+bool tz_parse_posix_tz(char *posix_tz, TZ_RRule *rrule) {
 	int tz_str_len = strlen(posix_tz) - 1;
 	if (tz_str_len < 4) { return false; }
 
@@ -569,7 +534,6 @@ bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out
 		return false;
 	}
 
-	int end_idx = 0;
 	for (int i = 0; i < s.len; i++) {
 		char ch = (char)s.data[i];
 		if (ch == '\n') {
@@ -579,13 +543,11 @@ bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out
 		if (ch == 0) {
 			return false;
 		}
-
-		end_idx += 1;
 	}
 	char *footer_str = (char *)s.data;
 
 	TZ_RRule rrule;
-	if (!parse_posix_tz(footer_str, &rrule)) { return false; }
+	if (!tz_parse_posix_tz(footer_str, &rrule)) { return false; }
 
 	// UTC is a special case, we don't need to alloc
 	if (real_hdr->typecnt == 1 && local_time_types[0].utoff == 0) {
@@ -597,10 +559,9 @@ bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out
 	char **ltt_names = malloc(sizeof(char *) * real_hdr->typecnt);
 	for (int i = 0; i < real_hdr->typecnt; i++) {
 		Local_Time_Type ltt = local_time_types[i];
-		char *ltt_name = timezone_string_table + ltt.idx;
 
-		Slice str = slice_sub(str_table, ltt.idx);
-		ltt_names[i] = strndup((char *)str.data, str.len);
+		Slice ltt_name_str = slice_sub(str_table, ltt.idx);
+		ltt_names[i] = strndup((char *)ltt_name_str.data, ltt_name_str.len);
 	}
 
 	TZ_Record *records = malloc(real_hdr->timecnt * sizeof(TZ_Record));
@@ -635,7 +596,7 @@ typedef struct {
 	uint64_t cap;
 } DynArr;
 
-void dynarr_append(DynArr *dyn, char *str) {
+static void dynarr_append(DynArr *dyn, char *str) {
 	if (dyn->len + 1 > dyn->cap) {
 		dyn->cap = MAX(8, dyn->cap * 2);
 		dyn->strs = realloc(dyn->strs, sizeof(char *) * dyn->cap);
@@ -644,7 +605,7 @@ void dynarr_append(DynArr *dyn, char *str) {
 	dyn->len += 1;
 }
 
-char *local_tz_name(void) {
+static char *local_tz_name(void) {
 	char *local_str = getenv("TZ");
 	if (local_str != NULL) {
 		return strdup(local_str);
@@ -695,7 +656,7 @@ static bool load_tzif_file(char *path, char *name, TZ_Region **region) {
 	return ret;
 }
 
-bool region_load(char *region_name, TZ_Region **region) {
+bool tz_region_load(char *region_name, TZ_Region **region) {
 	if (!strcmp(region_name, "UTC")) {
 		*region = NULL;
 		return true;
