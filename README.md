@@ -44,5 +44,7 @@ int main(void) {
 	print_time(local_now);
 	print_time(est_now);
 	print_time(back_to_utc);
+
+	return 0;
 }
 ```
