@@ -1033,36 +1033,16 @@ TZ_Time tz_time_to_tz(TZ_Time in_dt, TZ_Region *tz) {
 	return (TZ_Time){.time = adj_time, .tz = tz};
 }
 
-char *tz_time_to_str(TZ_Time dt) {
-	TZ_Date date = tz_get_date(dt);
-	TZ_HMS time = tz_get_hms(dt);
-	char *buf = NULL;
-
-	if (dt.tz == NULL) {
-		asprintf(&buf, "%02d-%02d-%04lld @ %02d:%02d:%02d UTC", date.month, date.day, date.year, time.hours, time.minutes, time.seconds);
-		return buf;
-	}
-
-	TZ_Record record = region_get_nearest(dt.tz, dt.time);
-
-	int hour = time.hours;
-	const char *am_pm_str = "AM";
-	if (hour > 12) {
-		am_pm_str = "PM";
-		hour -= 12;
-	}
-
-	char *shortname = (record.shortname == NULL) ? (char *)"" : record.shortname;
-	asprintf(&buf, "%02d-%02d-%04lld @ %02d:%02d:%02d %s %s", date.month, date.day, date.year, hour, time.minutes, time.seconds, am_pm_str, shortname);
-	return buf;
-}
-
 char *tz_shortname(TZ_Time t) {
+	if (t.tz == NULL) return (char *)"UTC";
+
 	TZ_Record record = region_get_nearest(t.tz, t.time);
 	return (record.shortname == NULL) ? (char *)"" : record.shortname;
 }
 
 bool tz_is_dst(TZ_Time t) {
+	if (t.tz == NULL) return false;
+
 	TZ_Record record = region_get_nearest(t.tz, t.time);
 	return record.dst;
 }

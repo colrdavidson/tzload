@@ -77,7 +77,6 @@ void tz_rrule_destroy(TZ_RRule *rrule);
 TZ_Time tz_time_new(int64_t time);
 TZ_Time tz_time_to_utc(TZ_Time dt);
 TZ_Time tz_time_to_tz(TZ_Time in_dt, TZ_Region *tz);
-char *tz_time_to_str(TZ_Time dt);
 
 TZ_Date tz_get_date(TZ_Time t);
 TZ_HMS  tz_get_hms(TZ_Time t);
