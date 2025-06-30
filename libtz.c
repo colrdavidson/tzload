@@ -722,7 +722,9 @@ static bool load_region(char *region_name, TZ_Region **region) {
 	return ret;
 }
 #else
-#error "Unsupported platform"
+static bool load_region(char *region_name, TZ_Region **region) {
+	return false;
+}
 #endif
 
 bool tz_region_load(char *region_name, TZ_Region **region) {
