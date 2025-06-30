@@ -192,7 +192,10 @@ static bool parse_posix_tz_offset(char *str, int64_t *offset, int64_t *idx) {
 
 	int64_t ret_sec = 0;
 	int64_t hours = 0;
+	int64_t mins = 0;
+	int64_t secs = 0;
 	int64_t len = 0;
+
 	if (!parse_i64(s, &hours, &len)) { return false; }
 	if (hours > 167 || hours < -167) { return false; }
 	ret_sec += hours * (60 * 60);
@@ -203,7 +206,6 @@ static bool parse_posix_tz_offset(char *str, int64_t *offset, int64_t *idx) {
 	}
 	s += 1;
 
-	int64_t mins = 0;
 	if (!parse_i64(s, &mins, &len)) { return false; }
 	if (len != 2) { return false; }
 	if (mins > 59 || mins < 0) { return false; }
@@ -215,7 +217,6 @@ static bool parse_posix_tz_offset(char *str, int64_t *offset, int64_t *idx) {
 	}
 	s += 1;
 
-	int64_t secs = 0;
 	if (!parse_i64(s, &secs, &len)) { return false; }
 	if (len != 2) { return false; }
 	if (secs > 59 || secs < 0) { return false; }
@@ -443,7 +444,7 @@ bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out
 		return false;
 	}
 
-	int real_block_size = tzif_data_block_size(real_hdr, v1_hdr->version);
+	int real_block_size = tzif_data_block_size(real_hdr, (TZif_Version)v1_hdr->version);
 	if (s.len <= sizeof(TZif_Header) + real_block_size) {
 		return false;
 	}
@@ -553,7 +554,7 @@ bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out
 	}
 
 	Slice str_table = {.data = (uint8_t *)timezone_string_table, .len = real_hdr->charcnt};
-	char **ltt_names = malloc(sizeof(char *) * real_hdr->typecnt);
+	char **ltt_names = (char **)malloc(sizeof(char *) * real_hdr->typecnt);
 	for (int i = 0; i < real_hdr->typecnt; i++) {
 		Local_Time_Type ltt = local_time_types[i];
 
@@ -561,7 +562,7 @@ bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out
 		ltt_names[i] = strndup((char *)ltt_name_str.data, ltt_name_str.len);
 	}
 
-	TZ_Record *records = malloc(real_hdr->timecnt * sizeof(TZ_Record));
+	TZ_Record *records = (TZ_Record *)malloc(real_hdr->timecnt * sizeof(TZ_Record));
 	for (int i = 0; i < real_hdr->timecnt; i++) {
 		int64_t trans_time = transition_times[i];
 		int trans_idx = transition_types[i];
@@ -571,7 +572,7 @@ bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out
 			.time       = trans_time,
 			.utc_offset = ltt.utoff,
 			.shortname  = ltt_names[trans_idx],
-			.dst        = ltt.dst,
+			.dst        = !!ltt.dst,
 		};
 	}
 
@@ -596,7 +597,7 @@ typedef struct {
 static void dynarr_append(DynArr *dyn, char *str) {
 	if (dyn->len + 1 > dyn->cap) {
 		dyn->cap = MAX(8, dyn->cap * 2);
-		dyn->strs = realloc(dyn->strs, sizeof(char *) * dyn->cap);
+		dyn->strs = (char **)realloc(dyn->strs, sizeof(char *) * dyn->cap);
 	}
 	dyn->strs[dyn->len] = str;
 	dyn->len += 1;
@@ -642,7 +643,7 @@ static bool load_tzif_file(char *path, char *name, TZ_Region **region) {
 	uint64_t file_length = lseek(zone_fd, 0, SEEK_END);
 	lseek(zone_fd, 0, SEEK_SET);
 
-	uint8_t *buffer = malloc(file_length);
+	uint8_t *buffer = (uint8_t *)malloc(file_length);
 	read(zone_fd, buffer, file_length);
 
 	bool ret = parse_tzif(buffer, file_length, name, region);
@@ -788,9 +789,9 @@ TZ_Date tz_get_date(TZ_Time t) {
 	month += 1;
 	day = day - begin + 1;
 	return (TZ_Date){
-		.year = year,
-		.month = month,
-		.day = day,
+		.year  = year,
+		.month = (int8_t)month,
+		.day   = (int8_t)day,
 	};
 }
 
@@ -816,7 +817,7 @@ TZ_HMS tz_get_hms(TZ_Time t) {
 	int64_t mins = secs / SECONDS_PER_MINUTE;
 	secs -= mins * SECONDS_PER_MINUTE;
 
-	return (TZ_HMS){.hours = hours, .minutes = mins, .seconds = secs};
+	return (TZ_HMS){.hours = (int8_t)hours, .minutes = (int8_t)mins, .seconds = (int8_t)secs};
 }
 
 static int64_t last_day_of_month(int64_t year, int64_t month) {
@@ -990,13 +991,13 @@ char *tz_time_to_str(TZ_Time dt) {
 	TZ_Record record = region_get_nearest(dt.tz, dt.time);
 
 	int hour = time.hours;
-	char *am_pm_str = "AM";
+	const char *am_pm_str = "AM";
 	if (hour > 12) {
 		am_pm_str = "PM";
 		hour -= 12;
 	}
 
-	char *shortname = (record.shortname == NULL) ? "" : record.shortname;
+	char *shortname = (record.shortname == NULL) ? (char *)"" : record.shortname;
 	asprintf(&buf, "%02d-%02d-%04lld @ %02d:%02d:%02d %s %s", date.month, date.day, date.year, hour, time.minutes, time.seconds, am_pm_str, shortname);
 	return buf;
 }

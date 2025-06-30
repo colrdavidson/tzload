@@ -5,7 +5,7 @@
 #include "libtz.h"
 
 char *region_name(TZ_Region *tz) {
-	if (tz == NULL) return "UTC";
+	if (tz == NULL) return (char *)"UTC";
 	return tz->name;
 }
 
@@ -41,7 +41,7 @@ bool rrule_eq(TZ_RRule a, TZ_RRule b) {
 int main(int argc, char **argv) {
 	char *tz_name;
 	if (argc < 2) {
-		tz_name = "local";
+		tz_name = (char *)"local";
 	} else {
 		tz_name = argv[1];
 	}
@@ -53,7 +53,7 @@ int main(int argc, char **argv) {
 	}
 
 	TZ_Region *other_region = NULL;
-	if (!tz_region_load("Asia/Tokyo", &other_region)) {
+	if (!tz_region_load((char *)"Asia/Tokyo", &other_region)) {
 		printf("Failed to load %s!\n", "Asia/Tokyo");
 		return 1;
 	}

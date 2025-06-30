@@ -42,9 +42,9 @@ typedef struct {
 	char *name;
 
 	TZ_Record *records;
-	int record_count;
+	int64_t record_count;
 	char **shortnames;
-	int shortname_count;
+	int64_t shortname_count;
 
 	TZ_RRule rrule;
 } TZ_Region;
