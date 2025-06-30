@@ -892,18 +892,6 @@ TZ_Date tz_get_date(TZ_Time t) {
 	};
 }
 
-TZ_HMS tz_get_hms(TZ_Time t) {
-	int64_t secs = (t.time + INTERNAL_TO_ABSOLUTE) % SECONDS_PER_DAY;
-
-	int64_t hours = secs / SECONDS_PER_HOUR;
-	secs -= hours * SECONDS_PER_HOUR;
-
-	int64_t mins = secs / SECONDS_PER_MINUTE;
-	secs -= mins * SECONDS_PER_MINUTE;
-
-	return (TZ_HMS){.hours = (int8_t)hours, .minutes = (int8_t)mins, .seconds = (int8_t)secs};
-}
-
 static int64_t trans_date_to_seconds(int64_t year, TZ_Transition_Date td) {
 	bool is_leap = is_leap_year(year);
 	int64_t t = year_to_time(year);
@@ -1080,4 +1068,16 @@ bool tz_is_dst(TZ_Time t) {
 
 	TZ_Record record = region_get_nearest(t.tz, t.time);
 	return record.dst;
+}
+
+TZ_HMS tz_get_hms(TZ_Time t) {
+	int64_t secs = (t.time + INTERNAL_TO_ABSOLUTE) % SECONDS_PER_DAY;
+
+	int64_t hours = secs / SECONDS_PER_HOUR;
+	secs -= hours * SECONDS_PER_HOUR;
+
+	int64_t mins = secs / SECONDS_PER_MINUTE;
+	secs -= mins * SECONDS_PER_MINUTE;
+
+	return (TZ_HMS){.hours = (int8_t)hours, .minutes = (int8_t)mins, .seconds = (int8_t)secs};
 }
