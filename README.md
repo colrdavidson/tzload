@@ -5,7 +5,9 @@
 
 `tz_region_load_from_file` and `tz_region_load_from_buffer` allow you to bundle your own IANA tzdb into your application if desired  
 
-`tz_time_new`             creates a TZ_Time, taking seconds from unix-epoch in UTC  
+`tz_time_from_components`   creates a TZ_Time, taking a TZ_Date, a TZ_HMS, and a TZ_Region  
+`tz_time_from_unix_seconds` creates a TZ_Time, taking seconds from unix-epoch in UTC  
+
 `tz_time_to_utc`          converts a TZ_Time to UTC  
 `tz_time_to_tz`           converts a TZ_Time to the provided timezone  
 `tz_time_to_unix_seconds` converts a TZ_Time to seconds from unix-epoch in UTC
