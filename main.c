@@ -61,15 +61,15 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	DateTime utc_now   = datetime_new(time(NULL));
-	DateTime local_now = datetime_to_tz(utc_now, local_region);
-	DateTime other_now   = datetime_to_tz(utc_now, other_region);
-	DateTime back_now  = datetime_to_tz(other_now, NULL);
+	TZ_Time utc_now    = tz_time_new(time(NULL));
+	TZ_Time local_now = tz_time_to_tz(utc_now, local_region);
+	TZ_Time other_now = tz_time_to_tz(utc_now, other_region);
+	TZ_Time back_now  = tz_time_to_tz(other_now, NULL);
 
-	printf("%s | %s\n", datetime_to_str(utc_now),   region_name(utc_now.tz));
-	printf("%s | %s\n", datetime_to_str(local_now), region_name(local_now.tz));
-	printf("%s | %s\n", datetime_to_str(other_now), region_name(other_now.tz));
-	printf("%s | %s\n", datetime_to_str(back_now),  region_name(back_now.tz));
+	printf("%s | %s\n", tz_time_to_str(utc_now),   region_name(utc_now.tz));
+	printf("%s | %s\n", tz_time_to_str(local_now), region_name(local_now.tz));
+	printf("%s | %s\n", tz_time_to_str(other_now), region_name(other_now.tz));
+	printf("%s | %s\n", tz_time_to_str(back_now),  region_name(back_now.tz));
 
 	return 0;
 }

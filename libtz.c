@@ -760,8 +760,8 @@ static bool is_leap_year(int64_t year) {
 	return year % 4 == 0 && ((year % 100) != 0 || (year % 400) == 0);
 }
 
-static Date get_date(int64_t t) {
-	uint64_t abs = (uint64_t)(t + UNIX_TO_ABSOLUTE);
+TZ_Date tz_get_date(TZ_Time t) {
+	uint64_t abs = (uint64_t)(t.time + UNIX_TO_ABSOLUTE);
 	uint64_t d = abs / SECONDS_PER_DAY;
 
 	uint64_t n = d / DAYS_PER_400_YEARS;
@@ -791,7 +791,7 @@ static Date get_date(int64_t t) {
 		if (day > 31+29-1) {
 			day -= 1;
 		} else if (day == 31+29-1) {
-			return (Date){
+			return (TZ_Date){
 				.year = year,
 				.month = 2,
 				.day = 29,
@@ -811,7 +811,7 @@ static Date get_date(int64_t t) {
 	}
 	month += 1;
 	day = day - begin + 1;
-	return (Date){
+	return (TZ_Date){
 		.year = year,
 		.month = month,
 		.day = day,
@@ -819,7 +819,7 @@ static Date get_date(int64_t t) {
 }
 
 static int64_t get_year(int64_t t) {
-	Date date = get_date(t);
+	TZ_Date date = tz_get_date((TZ_Time){.time = t, .tz = NULL});
 	return date.year;
 }
 
@@ -837,8 +837,8 @@ static int64_t year_to_time(int64_t year) {
 	return ((year_gap * 365) + leap_count) * SECONDS_PER_DAY;
 }
 
-static Time get_time(int64_t t) {
-	int64_t secs = (t + INTERNAL_TO_ABSOLUTE) % SECONDS_PER_DAY;
+TZ_HMS tz_get_hms(TZ_Time t) {
+	int64_t secs = (t.time + INTERNAL_TO_ABSOLUTE) % SECONDS_PER_DAY;
 
 	int64_t hours = secs / SECONDS_PER_HOUR;
 	secs -= hours * SECONDS_PER_HOUR;
@@ -846,7 +846,7 @@ static Time get_time(int64_t t) {
 	int64_t mins = secs / SECONDS_PER_MINUTE;
 	secs -= mins * SECONDS_PER_MINUTE;
 
-	return (Time){.hours = hours, .minutes = mins, .seconds = secs};
+	return (TZ_HMS){.hours = hours, .minutes = mins, .seconds = secs};
 }
 
 static int64_t last_day_of_month(int64_t year, int64_t month) {
@@ -975,27 +975,27 @@ static TZ_Record region_get_nearest(TZ_Region *tz, int64_t tm) {
 	return ret;
 }
 
-DateTime datetime_new(int64_t time) {
-	return (DateTime){.time = time, .tz = NULL};
+TZ_Time tz_time_new(int64_t time) {
+	return (TZ_Time){.time = time, .tz = NULL};
 }
 
-DateTime datetime_to_utc(DateTime dt) {
+TZ_Time tz_time_to_utc(TZ_Time dt) {
 	if (dt.tz == NULL) {
 		return dt;
 	}
 
 	TZ_Record record = region_get_nearest(dt.tz, dt.time);
 	int64_t adj_time = dt.time - record.utc_offset;
-	return (DateTime){.time = adj_time, .tz = NULL};
+	return (TZ_Time){.time = adj_time, .tz = NULL};
 }
 
-DateTime datetime_to_tz(DateTime in_dt, TZ_Region *tz) {
-	DateTime dt = in_dt;
+TZ_Time tz_time_to_tz(TZ_Time in_dt, TZ_Region *tz) {
+	TZ_Time dt = in_dt;
 	if (dt.tz == tz) {
 		return dt;
 	}
 	if (dt.tz != NULL) {
-		dt = datetime_to_utc(dt);
+		dt = tz_time_to_utc(dt);
 	}
 	if (tz == NULL) {
 		return dt;
@@ -1004,12 +1004,12 @@ DateTime datetime_to_tz(DateTime in_dt, TZ_Region *tz) {
 	TZ_Record record = region_get_nearest(tz, dt.time);
 
 	int64_t adj_time = dt.time + record.utc_offset;
-	return (DateTime){.time = adj_time, .tz = tz};
+	return (TZ_Time){.time = adj_time, .tz = tz};
 }
 
-char *datetime_to_str(DateTime dt) {
-	Date date = get_date(dt.time);
-	Time time = get_time(dt.time);
+char *tz_time_to_str(TZ_Time dt) {
+	TZ_Date date = tz_get_date(dt);
+	TZ_HMS time = tz_get_hms(dt);
 	char *buf = NULL;
 
 	if (dt.tz == NULL) {

@@ -53,23 +53,26 @@ typedef struct {
 	int64_t year;
 	int8_t month;
 	int8_t day;
-} Date;
+} TZ_Date;
 
 typedef struct {
 	int8_t hours;
 	int8_t minutes;
 	int8_t seconds;
-} Time;
+} TZ_HMS;
 
 typedef struct {
 	int64_t time;
 	TZ_Region *tz;
-} DateTime;
+} TZ_Time;
 
 bool region_load(char *region_name, TZ_Region **region);
 bool parse_posix_tz(char *posix_tz, TZ_RRule *rrule);
 
-DateTime datetime_new(int64_t time);
-DateTime datetime_to_utc(DateTime dt);
-DateTime datetime_to_tz(DateTime in_dt, TZ_Region *tz);
-char *datetime_to_str(DateTime dt);
+TZ_Time tz_time_new(int64_t time);
+TZ_Time tz_time_to_utc(TZ_Time dt);
+TZ_Time tz_time_to_tz(TZ_Time in_dt, TZ_Region *tz);
+char *tz_time_to_str(TZ_Time dt);
+
+TZ_Date tz_get_date(TZ_Time t);
+TZ_HMS  tz_get_hms(TZ_Time t);
