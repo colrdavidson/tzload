@@ -9,7 +9,7 @@
 
 #include "libtz.h"
 
-// UTILITIES
+// SECTION: Utilities
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 
 typedef struct {
@@ -157,7 +157,7 @@ static int64_t last_day_of_month(int64_t year, int64_t month) {
 	return day;
 }
 
-// TZIF Parsing
+// SECTION: TZif Parsing
 #define TZIF_MAGIC 0x545A6966
 #define BIG_BANG_ISH -0x800000000000000ll
 #define TWO_AM 2 * 60 * 60
@@ -701,7 +701,7 @@ static bool load_tzif_file(char *path, char *name, TZ_Region **region) {
 	return ret;
 }
 
-// TZ FUNCTIONS
+// SECTION: Platform-specific TZ_Region Functions
 #if !defined(_WIN64) || !defined(_WIN32)
 static char *local_tz_name(bool check_env) {
 	if (check_env) {
@@ -800,6 +800,7 @@ static bool load_local_region(bool check_env, TZ_Region **region) {
 }
 #endif
 
+// SECTION: Generic TZ_Region Functions
 bool tz_region_load(char *region_name, TZ_Region **region) {
 	return load_region(region_name, region);
 }
