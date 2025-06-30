@@ -1,7 +1,7 @@
 # Threadsafe Timezone Conversion Library for C
 
-`tz_region_load` loads a timezone using IANA names and your system's IANA tzdb (currently supported on Linux, FreeBSD, and OSX)  
-**NOTE:** use region "local" to get your local timezone  
+`tz_region_load`       loads a timezone using IANA names and your system's IANA tzdb (currently supported on Linux, FreeBSD, and OSX)  
+`tz_region_load_local` gets the local timezone, and then loads it
 
 `tz_region_load_from_file` and `tz_region_load_from_buffer` allow you to bundle your own IANA tzdb into your application if desired  
 

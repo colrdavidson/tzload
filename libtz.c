@@ -638,10 +638,12 @@ static bool load_tzif_file(char *path, char *name, TZ_Region **region) {
 }
 
 #if !defined(_WIN64) || !defined(_WIN32)
-static char *local_tz_name(void) {
-	char *local_str = getenv("TZ");
-	if (local_str != NULL) {
-		return strdup(local_str);
+static char *local_tz_name(bool check_env) {
+	if (check_env) {
+		char *local_str = getenv("TZ");
+		if (local_str != NULL) {
+			return strdup(local_str);
+		}
 	}
 
 	char *orig_localtime_path = (char *)"/etc/localtime";
@@ -698,18 +700,7 @@ static bool load_region(char *region_name, TZ_Region **region) {
 		return true;
 	}
 
-	char *reg_str = NULL;
-	if (!strcmp(region_name, "local")) {
-		reg_str = local_tz_name();
-		if (!strcmp(reg_str, "UTC")) {
-			free(reg_str);
-
-			*region = NULL;
-			return true;
-		}
-	} else {
-		reg_str = strdup(region_name);
-	}
+	char *reg_str = strdup(region_name);
 
 	char *region_path;
 	asprintf(&region_path, "%s/%s", "/usr/share/zoneinfo", reg_str);
@@ -721,14 +712,35 @@ static bool load_region(char *region_name, TZ_Region **region) {
 
 	return ret;
 }
+
+static bool load_local_region(bool check_env, TZ_Region **region) {
+	char *reg_str = local_tz_name(check_env);
+	if (!strcmp(reg_str, "UTC")) {
+		free(reg_str);
+		*region = NULL;
+		return true;
+	}
+
+	bool ret = load_region(reg_str, region);
+	free(reg_str);
+
+	return ret;
+}
 #else
 static bool load_region(char *region_name, TZ_Region **region) {
+	return false;
+}
+static bool load_local_region(bool check_env, TZ_Region **region) {
 	return false;
 }
 #endif
 
 bool tz_region_load(char *region_name, TZ_Region **region) {
 	return load_region(region_name, region);
+}
+
+bool tz_region_load_local(bool check_env, TZ_Region **region) {
+	return load_local_region(check_env, region);
 }
 
 bool tz_region_load_from_file(char *file_path, char *reg_str, TZ_Region **region) {

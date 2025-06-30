@@ -15,16 +15,9 @@ void print_time(TZ_Time t) {
 }
 
 int main(int argc, char **argv) {
-	char *tz_name;
-	if (argc < 2) {
-		tz_name = (char *)"local";
-	} else {
-		tz_name = argv[1];
-	}
-
 	TZ_Region *local_region = NULL;
-	if (!tz_region_load(tz_name, &local_region)) {
-		printf("Failed to load %s!\n", tz_name);
+	if (!tz_region_load_local(true, &local_region)) {
+		printf("Failed to load local region!\n");
 		return 1;
 	}
 
