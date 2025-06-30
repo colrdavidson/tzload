@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "libtz.h"
 
@@ -60,7 +61,7 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	DateTime utc_now   = datetime_now();
+	DateTime utc_now   = datetime_new(time(NULL));
 	DateTime local_now = datetime_to_tz(utc_now, local_region);
 	DateTime other_now   = datetime_to_tz(utc_now, other_region);
 	DateTime back_now  = datetime_to_tz(other_now, NULL);

@@ -5,7 +5,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <time.h>
 #include <errno.h>
 
 #include "libtz.h"
@@ -726,6 +725,22 @@ bool region_load(char *region_name, TZ_Region **region) {
 	return ret;
 }
 
+int32_t days_before[] = {
+    0,
+    31,
+    31 + 28,
+    31 + 28 + 31,
+    31 + 28 + 31 + 30,
+    31 + 28 + 31 + 30 + 31,
+    31 + 28 + 31 + 30 + 31 + 30,
+    31 + 28 + 31 + 30 + 31 + 30 + 31,
+    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31,
+    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30,
+    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31,
+    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 + 30,
+    31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 + 30 + 31,
+};
+
 static int64_t month_to_seconds(int64_t month, bool is_leap) {
 	int64_t month_seconds[] = {
 		0,              31 * DAY_SEC,  59 * DAY_SEC,  90 * DAY_SEC,
@@ -745,7 +760,7 @@ static bool is_leap_year(int64_t year) {
 	return year % 4 == 0 && ((year % 100) != 0 || (year % 400) == 0);
 }
 
-static int64_t get_year(int64_t t) {
+static Date get_date(int64_t t) {
 	uint64_t abs = (uint64_t)(t + UNIX_TO_ABSOLUTE);
 	uint64_t d = abs / SECONDS_PER_DAY;
 
@@ -767,7 +782,45 @@ static int64_t get_year(int64_t t) {
 	y += n;
 	d -= 365 * n;
 
-	return ((int64_t)y + ABSOLUTE_ZERO_YEAR);
+	int64_t year = ((int64_t)y + ABSOLUTE_ZERO_YEAR);
+	int64_t year_day = (int64_t)d;
+
+	int64_t day = year_day;
+
+	if (is_leap_year(year)) {
+		if (day > 31+29-1) {
+			day -= 1;
+		} else if (day == 31+29-1) {
+			return (Date){
+				.year = year,
+				.month = 2,
+				.day = 29,
+			};
+		}
+	}
+
+	int64_t month = day / 31;
+	int64_t end = days_before[month+1];
+	int64_t begin = 0;
+
+	if (day >= end) {
+		month += 1;
+		begin = end;
+	} else {
+		begin = days_before[month];
+	}
+	month += 1;
+	day = day - begin + 1;
+	return (Date){
+		.year = year,
+		.month = month,
+		.day = day,
+	};
+}
+
+static int64_t get_year(int64_t t) {
+	Date date = get_date(t);
+	return date.year;
 }
 
 static int64_t leap_years_before(int64_t year) {
@@ -784,6 +837,18 @@ static int64_t year_to_time(int64_t year) {
 	return ((year_gap * 365) + leap_count) * SECONDS_PER_DAY;
 }
 
+static Time get_time(int64_t t) {
+	int64_t secs = (t + INTERNAL_TO_ABSOLUTE) % SECONDS_PER_DAY;
+
+	int64_t hours = secs / SECONDS_PER_HOUR;
+	secs -= hours * SECONDS_PER_HOUR;
+
+	int64_t mins = secs / SECONDS_PER_MINUTE;
+	secs -= mins * SECONDS_PER_MINUTE;
+
+	return (Time){.hours = hours, .minutes = mins, .seconds = secs};
+}
+
 static int64_t last_day_of_month(int64_t year, int64_t month) {
 	int8_t month_days[] = {-1, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 	int64_t day = month_days[month];
@@ -796,7 +861,6 @@ static int64_t last_day_of_month(int64_t year, int64_t month) {
 
 static int64_t trans_date_to_seconds(int64_t year, TZ_Transition_Date td) {
 	bool is_leap = is_leap_year(year);
-
 	int64_t t = year_to_time(year);
 
 	switch (td.type) {
@@ -911,8 +975,8 @@ static TZ_Record region_get_nearest(TZ_Region *tz, int64_t tm) {
 	return ret;
 }
 
-DateTime datetime_now(void) {
-	return (DateTime){.time = time(NULL), .tz = NULL};
+DateTime datetime_new(int64_t time) {
+	return (DateTime){.time = time, .tz = NULL};
 }
 
 DateTime datetime_to_utc(DateTime dt) {
@@ -944,18 +1008,18 @@ DateTime datetime_to_tz(DateTime in_dt, TZ_Region *tz) {
 }
 
 char *datetime_to_str(DateTime dt) {
-	time_t t = dt.time;
-	struct tm *tm = gmtime(&t);
+	Date date = get_date(dt.time);
+	Time time = get_time(dt.time);
 	char *buf = NULL;
 
 	if (dt.tz == NULL) {
-		asprintf(&buf, "%02d-%02d-%04d @ %02d:%02d:%02d UTC", tm->tm_mon, tm->tm_mday, 1900 + tm->tm_year, tm->tm_hour, tm->tm_min, tm->tm_sec);
+		asprintf(&buf, "%02d-%02d-%04lld @ %02d:%02d:%02d UTC", date.month, date.day, date.year, time.hours, time.minutes, time.seconds);
 		return buf;
 	}
 
 	TZ_Record record = region_get_nearest(dt.tz, dt.time);
 
-	int hour = tm->tm_hour;
+	int hour = time.hours;
 	char *am_pm_str = "AM";
 	if (hour > 12) {
 		am_pm_str = "PM";
@@ -963,6 +1027,6 @@ char *datetime_to_str(DateTime dt) {
 	}
 
 	char *shortname = (record.shortname == NULL) ? "" : record.shortname;
-	asprintf(&buf, "%02d-%02d-%04d @ %02d:%02d:%02d %s %s", tm->tm_mon, tm->tm_mday, 1900 + tm->tm_year, hour, tm->tm_min, tm->tm_sec, am_pm_str, shortname);
+	asprintf(&buf, "%02d-%02d-%04lld @ %02d:%02d:%02d %s %s", date.month, date.day, date.year, hour, time.minutes, time.seconds, am_pm_str, shortname);
 	return buf;
 }

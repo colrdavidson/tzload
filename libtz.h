@@ -50,6 +50,18 @@ typedef struct {
 } TZ_Region;
 
 typedef struct {
+	int64_t year;
+	int8_t month;
+	int8_t day;
+} Date;
+
+typedef struct {
+	int8_t hours;
+	int8_t minutes;
+	int8_t seconds;
+} Time;
+
+typedef struct {
 	int64_t time;
 	TZ_Region *tz;
 } DateTime;
@@ -57,7 +69,7 @@ typedef struct {
 bool region_load(char *region_name, TZ_Region **region);
 bool parse_posix_tz(char *posix_tz, TZ_RRule *rrule);
 
-DateTime datetime_now(void);
+DateTime datetime_new(int64_t time);
 DateTime datetime_to_utc(DateTime dt);
 DateTime datetime_to_tz(DateTime in_dt, TZ_Region *tz);
 char *datetime_to_str(DateTime dt);
