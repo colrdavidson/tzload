@@ -67,6 +67,8 @@ typedef struct {
 } TZ_Time;
 
 bool tz_region_load(char *region_name, TZ_Region **region);
+bool tz_region_load_from_file(char *file_path, char *reg_str, TZ_Region **region);
+bool tz_region_load_from_buffer(uint8_t *buffer, size_t sz, char *reg_str, TZ_Region **region);
 bool tz_parse_posix_tz(char *posix_tz, int tz_str_len, TZ_RRule *rrule);
 
 void tz_region_destroy(TZ_Region *region);

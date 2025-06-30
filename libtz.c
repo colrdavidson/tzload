@@ -654,7 +654,8 @@ static bool load_tzif_file(char *path, char *name, TZ_Region **region) {
 	return ret;
 }
 
-bool tz_region_load(char *region_name, TZ_Region **region) {
+// Load region on Linux
+static bool load_region(char *region_name, TZ_Region **region) {
 	if (!strcmp(region_name, "UTC")) {
 		*region = NULL;
 		return true;
@@ -682,6 +683,18 @@ bool tz_region_load(char *region_name, TZ_Region **region) {
 	free(region_path);
 
 	return ret;
+}
+
+bool tz_region_load(char *region_name, TZ_Region **region) {
+	return load_region(region_name, region);
+}
+
+bool tz_region_load_from_file(char *file_path, char *reg_str, TZ_Region **region) {
+	return load_tzif_file(file_path, reg_str, region);
+}
+
+bool tz_region_load_from_buffer(uint8_t *buffer, size_t sz, char *reg_str, TZ_Region **region) {
+	return parse_tzif(buffer, sz, reg_str, region);
 }
 
 void tz_rrule_destroy(TZ_RRule *rrule) {
