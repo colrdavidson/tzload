@@ -67,7 +67,10 @@ typedef struct {
 } TZ_Time;
 
 bool tz_region_load(char *region_name, TZ_Region **region);
-bool tz_parse_posix_tz(char *posix_tz, TZ_RRule *rrule);
+bool tz_parse_posix_tz(char *posix_tz, int tz_str_len, TZ_RRule *rrule);
+
+void tz_region_destroy(TZ_Region *region);
+void tz_rrule_destroy(TZ_RRule *rrule);
 
 TZ_Time tz_time_new(int64_t time);
 TZ_Time tz_time_to_utc(TZ_Time dt);

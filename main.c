@@ -68,5 +68,8 @@ int main(int argc, char **argv) {
 	printf("%s | %s\n", tz_time_to_str(other_now), region_name(other_now.tz));
 	printf("%s | %s\n", tz_time_to_str(back_now),  region_name(back_now.tz));
 
+	tz_region_destroy(local_region);
+	tz_region_destroy(other_region);
+
 	return 0;
 }

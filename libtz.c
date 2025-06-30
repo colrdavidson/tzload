@@ -230,8 +230,7 @@ end_parse:
 	return true;
 }
 
-static bool parse_posix_rrule(char *rrule_str, TZ_Transition_Date *date, int64_t *idx) {
-	int rrule_str_len = strlen(rrule_str);
+static bool parse_posix_rrule(char *rrule_str, int rrule_str_len, TZ_Transition_Date *date, int64_t *idx) {
 	if (rrule_str_len < 2) { return false; }
 
 	char *str = rrule_str;
@@ -330,10 +329,8 @@ static bool parse_posix_rrule(char *rrule_str, TZ_Transition_Date *date, int64_t
 	return false;
 }
 
-bool tz_parse_posix_tz(char *posix_tz, TZ_RRule *rrule) {
-	int tz_str_len = strlen(posix_tz) - 1;
+bool tz_parse_posix_tz(char *posix_tz, int tz_str_len, TZ_RRule *rrule) {
 	if (tz_str_len < 4) { return false; }
-
 
 	char *tz_str = posix_tz;
 
@@ -347,7 +344,7 @@ bool tz_parse_posix_tz(char *posix_tz, TZ_RRule *rrule) {
 	std_offset *= -1;
 	tz_str += end_idx;
 
-	int64_t rem_len = (tz_str - posix_tz) - tz_str_len;
+	int64_t rem_len = tz_str_len - (tz_str - posix_tz);
 	if (rem_len == 0) {
 		*rrule = (TZ_RRule){
 			.has_dst = false,
@@ -378,11 +375,13 @@ bool tz_parse_posix_tz(char *posix_tz, TZ_RRule *rrule) {
 	tz_str += 1;
 
 	TZ_Transition_Date std_td;
-	if (!parse_posix_rrule(tz_str, &std_td, &end_idx)) { return false; }
+	rem_len = tz_str_len - (tz_str - posix_tz);
+	if (!parse_posix_rrule(tz_str, rem_len, &std_td, &end_idx)) { return false; }
 	tz_str += end_idx;
 
 	TZ_Transition_Date dst_td;
-	if (!parse_posix_rrule(tz_str, &dst_td, &end_idx)) { return false; }
+	rem_len = tz_str_len - (tz_str - posix_tz);
+	if (!parse_posix_rrule(tz_str, rem_len, &dst_td, &end_idx)) { return false; }
 	tz_str += end_idx;
 
 	*rrule = (TZ_RRule){
@@ -547,7 +546,7 @@ bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out
 	char *footer_str = (char *)s.data;
 
 	TZ_RRule rrule;
-	if (!tz_parse_posix_tz(footer_str, &rrule)) { return false; }
+	if (!tz_parse_posix_tz(footer_str, s.len - 1, &rrule)) { return false; }
 
 	// UTC is a special case, we don't need to alloc
 	if (real_hdr->typecnt == 1 && local_time_types[0].utoff == 0) {
@@ -684,6 +683,24 @@ bool tz_region_load(char *region_name, TZ_Region **region) {
 	free(region_path);
 
 	return ret;
+}
+
+void tz_rrule_destroy(TZ_RRule *rrule) {
+	free(rrule->std_name);
+	free(rrule->dst_name);
+}
+
+void tz_region_destroy(TZ_Region *region) {
+	if (region == NULL) return;
+
+	for (int i = 0; i < region->shortname_count; i++) {
+		free(region->shortnames[i]);
+	}
+	free(region->shortnames);
+	free(region->records);
+	free(region->name);
+	tz_rrule_destroy(&region->rrule);
+	free(region);
 }
 
 int32_t days_before[] = {
