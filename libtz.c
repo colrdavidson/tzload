@@ -1,0 +1,891 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <time.h>
+#include <errno.h>
+
+#include "libtz.h"
+
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define TZIF_MAGIC 0x545A6966
+#define BIG_BANG_ISH -0x800000000000000ll
+#define TWO_AM 2 * 60 * 60
+
+#define DAY_SEC 86400
+
+#define SECONDS_PER_MINUTE 60
+#define SECONDS_PER_HOUR (60 * SECONDS_PER_MINUTE)
+#define SECONDS_PER_DAY (24 * SECONDS_PER_HOUR)
+
+#define DAYS_PER_400_YEARS ((365 * 400) + 97)
+#define DAYS_PER_100_YEARS ((365 * 100) + 24)
+#define DAYS_PER_4_YEARS   ((365 * 4)   +  1)
+
+#define ABSOLUTE_ZERO_YEAR   ((int64_t)(-292277022399ll))
+#define ABSOLUTE_TO_INTERNAL ((int64_t)(-9223371966579724800ll))
+#define INTERNAL_TO_ABSOLUTE (-ABSOLUTE_TO_INTERNAL)
+
+#define UNIX_TO_INTERNAL ((int64_t)((1969 * 365) + (1969 / 4) - (1969 / 100) + (1969 / 400) * SECONDS_PER_DAY))
+#define UNIX_TO_ABSOLUTE (UNIX_TO_INTERNAL + INTERNAL_TO_ABSOLUTE)
+
+typedef struct {
+	uint8_t *data;
+	uint64_t len;
+} Slice;
+
+Slice slice_sub(Slice s, uint64_t start_idx) {
+	return (Slice){.data = s.data + start_idx, .len = s.len - start_idx};
+}
+
+void print_tz_record(TZ_Record record) {
+	printf("record:\n");
+	printf("- time:      %lld\n", record.time);
+	printf("- offset:    %lld\n", record.utc_offset);
+	printf("- shortname: %s\n", record.shortname);
+	printf("- dst?:      %s\n", record.dst ? "true" : "false");
+}
+
+void print_tz_region(TZ_Region *region) {
+	printf("Region: %s\n", region->name);
+	printf("records:\n");
+	for (int i = 0; i < region->record_count; i++) {
+		TZ_Record record = region->records[i];
+		print_tz_record(record);
+	}
+}
+
+typedef enum {
+	V1 = 0,
+	V2 = '2',
+	V3 = '3',
+	V4 = '4',
+} TZif_Version;
+
+typedef enum {
+	Standard = 0,
+	DST      = 1,
+} TZif_Sun_Shift;
+
+typedef struct __attribute__((packed)) {
+	int64_t occur;
+	int32_t corr;
+} Leapsecond_Record;
+
+typedef struct __attribute__((packed)) {
+	uint32_t magic;
+	uint8_t  version;
+	uint8_t  reserved[15];
+	uint32_t isutcnt;
+	uint32_t isstdcnt;
+	uint32_t leapcnt;
+	uint32_t timecnt;
+	uint32_t typecnt;
+	uint32_t charcnt;
+} TZif_Header;
+
+typedef struct __attribute__((packed)) {
+	int32_t utoff;
+	uint8_t dst;
+	uint8_t idx;
+} Local_Time_Type;
+
+void tzif_hdr_to_native(TZif_Header *hdr) {
+	hdr->magic = ntohl(hdr->magic);
+	hdr->isutcnt = ntohl(hdr->isutcnt);
+	hdr->isstdcnt = ntohl(hdr->isstdcnt);
+	hdr->leapcnt = ntohl(hdr->leapcnt);
+	hdr->timecnt = ntohl(hdr->timecnt);
+	hdr->typecnt = ntohl(hdr->typecnt);
+	hdr->charcnt = ntohl(hdr->charcnt);
+}
+
+void print_tzif_hdr(TZif_Header *hdr) {
+	printf("TZif_Header\n");
+	printf("- version:  %u\n", hdr->version);
+	printf("- isutcnt:  %u\n", hdr->isutcnt);
+	printf("- isstdcnt: %u\n", hdr->isstdcnt);
+	printf("- leapcnt:  %u\n", hdr->leapcnt);
+	printf("- timecnt:  %u\n", hdr->timecnt);
+	printf("- typecnt:  %u\n", hdr->typecnt);
+	printf("- charcnt:  %u\n", hdr->charcnt);
+}
+
+int tzif_data_block_size(TZif_Header *hdr, TZif_Version version) {
+	int time_size;
+
+	if (version == V1) {
+		time_size = 4;
+	} else if (version == V2 || version == V3 || version == V4) {
+		time_size = 8;
+	} else {
+		return 0;
+	}
+
+	return (hdr->timecnt * time_size)              +
+		   hdr->timecnt                            + 
+		   hdr->typecnt  * sizeof(Local_Time_Type) +
+		   hdr->charcnt                            +
+		   hdr->leapcnt  * (time_size + 4)         +
+		   hdr->isstdcnt                           +
+		   hdr->isutcnt;
+}
+
+static bool is_alphabetic(uint8_t ch) {
+	//     ('A'   ->    'Z')        || ('a'    ->    'z')
+	return (ch > 0x40 && ch < 0x5B) || (ch > 0x60 && ch < 0x7B);
+}
+
+static bool is_numeric(uint8_t ch) {
+	//     ('0'   ->    '9')
+	return (ch > 0x2f && ch < 0x3A);
+}
+
+static bool is_alphanumeric(uint8_t ch) {
+	return is_alphabetic(ch) || is_numeric(ch);
+}
+
+static bool is_valid_quoted_char(uint8_t ch) {
+	return is_alphabetic(ch) || is_numeric(ch) || ch == '+' || ch == '-';
+}
+
+static bool parse_posix_tz_shortname(char *str, char **out, int64_t *idx) {
+	bool was_quoted = false;
+	bool quoted = false;
+	int i = 0;
+
+	char *s = str;
+	for (; *s != '\0'; s++,i++) {
+		char ch = *s;
+
+		if (!quoted && ch == '<') {
+			quoted = true;
+			was_quoted = true;
+			continue;
+		}
+
+		if (quoted && ch == '>') {
+			quoted = false;
+			break;
+		}
+
+		if (!is_valid_quoted_char(ch) && ch != ',') {
+			return false;
+		}
+
+		if (!quoted && !is_alphabetic(ch)) {
+			break;
+		}
+	}
+
+	// We never got the trailing quote?
+	if (was_quoted && quoted) {
+		return false;
+	}
+
+	int end_idx = i;
+	if (was_quoted) {
+		end_idx += 1;
+		asprintf(out, "%.*s", end_idx, str+1);
+		*idx = end_idx;
+	} else {
+		asprintf(out, "%.*s", end_idx, str);
+		*idx = end_idx;
+	}
+
+	return true;
+}
+
+static bool parse_i64(char *str, int64_t *val, int64_t *len) {
+	char *endptr = NULL;
+	int64_t ret = strtoll(str, &endptr, 10);
+	if (ret == 0 && errno == EINVAL) {
+		return false;
+	}
+
+	*val = ret;
+	*len = endptr - str;
+	return true;
+}
+
+static bool parse_posix_tz_offset(char *str, int64_t *offset, int64_t *idx) {
+	int64_t sign = 1;
+	int start_idx = 0;
+	int i = 0;
+
+	if (*str == '+') {
+		i += 1;
+		sign = 1;
+		start_idx = 1;
+	} else if (*str == '-') {
+		i += 1;
+		sign = -1;
+		start_idx = 1;
+	}
+
+	char *s = str + start_idx;
+
+	int64_t ret_sec = 0;
+	int64_t hours = 0;
+	int64_t len = 0;
+	if (!parse_i64(s, &hours, &len)) { return false; }
+	if (hours > 167 || hours < -167) { return false; }
+	ret_sec += hours * (60 * 60);
+	s += len;
+
+	if (*s != ':') {
+		goto end_parse;
+	}
+	s += 1;
+
+	int64_t mins = 0;
+	if (!parse_i64(s, &mins, &len)) { return false; }
+	if (len != 2) { return false; }
+	if (mins > 59 || mins < 0) { return false; }
+	ret_sec += mins * 60;
+	s += len;
+
+	if (*s != ':') {
+		goto end_parse;
+	}
+	s += 1;
+
+	int64_t secs = 0;
+	if (!parse_i64(s, &secs, &len)) { return false; }
+	if (len != 2) { return false; }
+	if (secs > 59 || secs < 0) { return false; }
+	ret_sec += secs;
+	s += len;
+
+end_parse:
+	*offset = ret_sec * sign;
+	*idx = s - str;
+	return true;
+}
+
+static bool parse_posix_rrule(char *rrule_str, TZ_Transition_Date *date, int64_t *idx) {
+	int rrule_str_len = strlen(rrule_str);
+	if (rrule_str_len < 2) { return false; }
+
+	char *str = rrule_str;
+	int64_t off = 0;
+
+	// No leap
+	if (*str == 'J') {
+		str += 1;
+
+		int64_t day = 0;
+		if (!parse_i64(str, &day, &off)) { return false; }
+		if (day < 1 || day > 365) { return false; }
+		str += off;
+
+		int64_t offset = TWO_AM;
+		if (*str == '/') {
+			str += 1;
+			if (!parse_posix_tz_offset(str, &offset, &off)) { return false; }
+			str += off;
+		}
+		if (*str == ',') {
+			str += 1;
+		}
+
+		*date = (TZ_Transition_Date){
+			.type  = TZ_No_Leap,
+			.day   = (uint16_t)day,
+			.time  = offset,
+		};
+		*idx = str - rrule_str;
+		return true;
+
+	} else if (*str == 'M') {
+		str += 1;
+
+		int64_t month, week, day = 0;
+		if (!parse_i64(str, &month, &off)) { return false; }
+		if (month < 1 || month > 12) { return false; }
+		str += off + 1;
+
+		if (!parse_i64(str, &week, &off)) { return false; }
+		if (week < 1 || week > 5) { return false; }
+		str += off + 1;
+
+		if (!parse_i64(str, &day, &off)) { return false; }
+		if (day < 0 || day > 6) { return false; }
+		str += off;
+
+		int64_t offset = TWO_AM;
+		if (*str == '/') {
+			str += 1;
+			if (!parse_posix_tz_offset(str, &offset, &off)) { return false; }
+			str += off;
+		}
+
+		if (*str == ',') {
+			str += 1;
+		}
+
+		*date = (TZ_Transition_Date){
+			.type  = TZ_Month_Week_Day,
+			.month = (uint8_t)month,
+			.week  = (uint8_t)week,
+			.day   = (uint16_t)day,
+			.time  = offset,
+		};
+		*idx = str - rrule_str;
+		return true;
+
+	// Leap
+	} else if (is_numeric(*str)) {
+		int64_t day = 0;
+		if (!parse_i64(str, &day, &off)) { return false; }
+		if (day < 1 || day > 365) { return false; }
+		str += off;
+
+		int64_t offset = TWO_AM;
+		if (*str == '/') {
+			str += 1;
+			if (!parse_posix_tz_offset(str, &offset, &off)) { return false; }
+			str += off;
+		}
+		if (*str == ',') {
+			str += 1;
+		}
+
+		*date = (TZ_Transition_Date){
+			.type  = TZ_Leap,
+			.day   = (uint16_t)day,
+			.time  = offset,
+		};
+		*idx = str - rrule_str;
+		return true;
+	}
+
+	return false;
+}
+
+static bool parse_posix_tz(char *posix_tz, TZ_RRule *rrule) {
+	int tz_str_len = strlen(posix_tz);
+	if (tz_str_len < 4) { return false; }
+
+	char *tz_str = posix_tz;
+
+	char *std_name = NULL;
+	int64_t end_idx = 0;
+	if (!parse_posix_tz_shortname(tz_str, &std_name, &end_idx)) { return false; }
+
+	int64_t std_offset = 0;
+	tz_str += end_idx;
+	if (!parse_posix_tz_offset(tz_str, &std_offset, &end_idx)) { return false; }
+	std_offset *= -1;
+	tz_str += end_idx;
+
+	if (*tz_str == '\n') {
+		*rrule = (TZ_RRule){
+			.has_dst = false,
+			.std_name = std_name,
+			.std_offset = std_offset,
+			.std_date = (TZ_Transition_Date){
+				.type = TZ_Leap,
+				.day  = 0,
+				.time = TWO_AM,
+			},
+		};
+		return true;
+	}
+
+	char *dst_name = NULL;
+	int64_t dst_offset = std_offset + (60 * 60);
+	if (*tz_str != ',') {
+		if (!parse_posix_tz_shortname(tz_str, &dst_name, &end_idx)) { return false; }
+		tz_str += end_idx;
+
+		if (*tz_str != ',') {
+			if (!parse_posix_tz_offset(tz_str, &dst_offset, &end_idx)) { return false; }
+			dst_offset *= -1;
+			tz_str += end_idx;
+		}
+	}
+	if (*tz_str != ',') { return false; }
+	tz_str += 1;
+
+	TZ_Transition_Date std_td;
+	if (!parse_posix_rrule(tz_str, &std_td, &end_idx)) { return false; }
+	tz_str += end_idx;
+
+	TZ_Transition_Date dst_td;
+	if (!parse_posix_rrule(tz_str, &dst_td, &end_idx)) { return false; }
+	tz_str += end_idx;
+
+	*rrule = (TZ_RRule){
+		.has_dst = true,
+
+		.std_name = std_name,
+		.std_offset = std_offset,
+		.std_date   = std_td,
+
+		.dst_name = dst_name,
+		.dst_offset = dst_offset,
+		.dst_date   = dst_td,
+	};
+
+	return true;
+}
+
+bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out_region) {
+	Slice s = {.data = buffer, .len = size};
+
+	TZif_Header *v1_hdr = (TZif_Header *)s.data;
+	tzif_hdr_to_native(v1_hdr);
+
+	if (v1_hdr->magic != TZIF_MAGIC) {
+		return false;
+	}
+	if (v1_hdr->typecnt == 0 || v1_hdr->charcnt == 0) {
+		return false;
+	}
+	if (v1_hdr->isutcnt != 0 && v1_hdr->isutcnt != v1_hdr->typecnt) {
+		return false;
+	}
+
+	if (v1_hdr->version == V1) {
+		return false;
+	}
+
+	if (v1_hdr->version != V2 && v1_hdr->version != V3) {
+		return false;
+	}
+
+	int first_block_size = tzif_data_block_size(v1_hdr, V1);
+	if (s.len <= sizeof(TZif_Header) + first_block_size) {
+		return false;
+	}
+	s = slice_sub(s, sizeof(TZif_Header) + first_block_size);
+
+	TZif_Header *real_hdr = (TZif_Header *)s.data;
+	tzif_hdr_to_native(real_hdr);
+
+	if (real_hdr->magic != TZIF_MAGIC) {
+		return false;
+	}
+	if (real_hdr->typecnt == 0 || real_hdr->charcnt == 0) {
+		return false;
+	}
+	if (real_hdr->isutcnt != 0 && real_hdr->isutcnt != real_hdr->typecnt) {
+		return false;
+	}
+	if (real_hdr->isstdcnt != 0 && real_hdr->isstdcnt != real_hdr->typecnt) {
+		return false;
+	}
+
+	int real_block_size = tzif_data_block_size(real_hdr, v1_hdr->version);
+	if (s.len <= sizeof(TZif_Header) + real_block_size) {
+		return false;
+	}
+	s = slice_sub(s, sizeof(TZif_Header));
+
+	// Scan and flip all the tzif arrays
+	int64_t *transition_times = (int64_t *)s.data;
+	for (int i = 0; i < real_hdr->timecnt; i++) {
+		int64_t *time = &transition_times[i];
+		*time = ntohll(*time);
+		if (*time < BIG_BANG_ISH) {
+			return false;
+		}
+	}
+	s = slice_sub(s, real_hdr->timecnt * sizeof(int64_t));
+
+	uint8_t *transition_types = s.data;
+	for (int i = 0; i < real_hdr->timecnt; i++) {
+		uint8_t type = transition_types[i];
+		if ((int)type > ((int)real_hdr->typecnt - 1)) {
+			return false;
+		}
+	}
+	s = slice_sub(s, real_hdr->timecnt);
+
+	Local_Time_Type *local_time_types = (Local_Time_Type *)s.data;
+	for (int i = 0; i < real_hdr->typecnt; i++) {
+		Local_Time_Type *ltt = &local_time_types[i];
+		ltt->utoff = ntohl(ltt->utoff);
+
+		// UT offset should be > -25 and < 26 hours
+		if ((int)ltt->utoff < -89999 || (int)ltt->utoff > 93599) {
+			return false;
+		}
+
+		if (ltt->dst != DST && ltt->dst != Standard) {
+			return false;
+		}
+
+		if ((int)ltt->idx > ((int)real_hdr->charcnt - 1)) {
+			return false;
+		}
+	}
+	s = slice_sub(s, real_hdr->typecnt * sizeof(Local_Time_Type));
+
+	char *timezone_string_table = (char *)s.data;
+	s = slice_sub(s, real_hdr->charcnt);
+
+	Leapsecond_Record *leapsecond_records = (Leapsecond_Record *)s.data;
+	for (int i = 0; i < real_hdr->leapcnt; i++) {
+		Leapsecond_Record *record = &leapsecond_records[i];
+		record->occur = ntohll(record->occur);
+		record->corr = ntohl(record->corr);
+	}
+	if (real_hdr->leapcnt > 0 && leapsecond_records[0].occur < 0) {
+		return false;
+	}
+	s = slice_sub(s, real_hdr->leapcnt * sizeof(Leapsecond_Record));
+
+	uint8_t *standard_wall_tags = s.data;
+	for (int i = 0; i < real_hdr->isstdcnt; i++) {
+		uint8_t stdwall_tag = standard_wall_tags[i];
+		if (stdwall_tag != 0 && stdwall_tag != 1) {
+			return false;
+		}
+	}
+	s = slice_sub(s, real_hdr->isstdcnt);
+
+	uint8_t *ut_tags = s.data;
+	for (int i = 0; i < real_hdr->isutcnt; i++) {
+		uint8_t ut_tag = ut_tags[i];
+		if (ut_tag != 0 && ut_tag != 1) {
+			return false;
+		}
+	}
+	s = slice_sub(s, real_hdr->isutcnt);
+
+	// Start of footer
+	if (s.data[0] != '\n') {
+		return false;
+	}
+	s = slice_sub(s, 1);
+
+	if (s.data[0] == ':') {
+		return false;
+	}
+
+	int end_idx = 0;
+	for (int i = 0; i < s.len; i++) {
+		char ch = (char)s.data[i];
+		if (ch == '\n') {
+			break;
+		}
+
+		if (ch == 0) {
+			return false;
+		}
+
+		end_idx += 1;
+	}
+	char *footer_str = (char *)s.data;
+
+	TZ_RRule rrule;
+	if (!parse_posix_tz(footer_str, &rrule)) { return false; }
+
+	// UTC is a special case, we don't need to alloc
+	if (real_hdr->typecnt == 1 && local_time_types[0].utoff == 0) {
+		*out_region = NULL;
+		return true;
+	}
+
+	Slice str_table = {.data = (uint8_t *)timezone_string_table, .len = real_hdr->charcnt};
+	char **ltt_names = malloc(sizeof(char *) * real_hdr->typecnt);
+	for (int i = 0; i < real_hdr->typecnt; i++) {
+		Local_Time_Type ltt = local_time_types[i];
+		char *ltt_name = timezone_string_table + ltt.idx;
+
+		Slice str = slice_sub(str_table, ltt.idx);
+		ltt_names[i] = strndup((char *)str.data, str.len);
+	}
+
+	TZ_Record *records = malloc(real_hdr->timecnt * sizeof(TZ_Record));
+	for (int i = 0; i < real_hdr->timecnt; i++) {
+		int64_t trans_time = transition_times[i];
+		int trans_idx = transition_types[i];
+		Local_Time_Type ltt = local_time_types[trans_idx];
+
+		records[i] = (TZ_Record){
+			.time       = trans_time,
+			.utc_offset = ltt.utoff,
+			.shortname  = ltt_names[trans_idx],
+			.dst        = ltt.dst,
+		};
+	}
+
+	TZ_Region *region = (TZ_Region *)malloc(sizeof(TZ_Region));
+	*region = (TZ_Region){
+		.records         = records,
+		.record_count    = real_hdr->timecnt,
+		.shortnames      = ltt_names,
+		.shortname_count = real_hdr->typecnt,
+		.name            = strdup(region_name),
+	};
+	*out_region = region;
+	return true;
+}
+
+typedef struct {
+	char **strs;
+	uint64_t len;
+	uint64_t cap;
+} DynArr;
+
+void dynarr_append(DynArr *dyn, char *str) {
+	if (dyn->len + 1 > dyn->cap) {
+		dyn->cap = MAX(8, dyn->cap * 2);
+		dyn->strs = realloc(dyn->strs, sizeof(char *) * dyn->cap);
+	}
+	dyn->strs[dyn->len] = str;
+	dyn->len += 1;
+}
+
+char *local_tz_name(void) {
+	char *local_str = getenv("TZ");
+	if (local_str != NULL) {
+		return strdup(local_str);
+	}
+
+	char *local_path = realpath("/etc/localtime", NULL);
+
+	DynArr path_chunks = {};
+	char *path_ptr = NULL;
+	char *chunk = NULL;
+	for (chunk = strtok_r(local_path, "/", &path_ptr); chunk != NULL; chunk = strtok_r(NULL, "/", &path_ptr)) {
+		dynarr_append(&path_chunks, chunk);
+	}
+
+	char *local_tz = NULL;
+	char *path_file = path_chunks.strs[path_chunks.len - 1];
+	char *path_dir = path_chunks.strs[path_chunks.len - 2];
+	if (strstr(path_dir, "zoneinfo")) {
+		local_tz = strdup(path_file);
+	} else {
+		asprintf(&local_tz, "%s/%s", path_dir, path_file);
+	}
+
+	free(path_chunks.strs);
+	free(local_path);
+
+	return local_tz;
+}
+
+static bool load_tzif_file(char *path, char *name, TZ_Region **region) {
+	int zone_fd = open(path, O_RDONLY);
+	if (zone_fd < 0) {
+		printf("Failed to open %s\n", path);
+		return false;
+	}
+
+	uint64_t file_length = lseek(zone_fd, 0, SEEK_END);
+	lseek(zone_fd, 0, SEEK_SET);
+
+	uint8_t *buffer = malloc(file_length);
+	read(zone_fd, buffer, file_length);
+
+	bool ret = parse_tzif(buffer, file_length, name, region);
+
+	free(buffer);
+	close(zone_fd);
+
+	return ret;
+}
+
+bool region_load(char *region_name, TZ_Region **region) {
+	if (!strcmp(region_name, "UTC")) {
+		*region = NULL;
+		return true;
+	}
+
+	char *reg_str = NULL;
+	if (!strcmp(region_name, "local")) {
+		reg_str = local_tz_name();
+		if (!strcmp(reg_str, "UTC")) {
+			free(reg_str);
+
+			*region = NULL;
+			return true;
+		}
+	} else {
+		reg_str = strdup(region_name);
+	}
+
+	char *region_path;
+	asprintf(&region_path, "%s/%s", "/usr/share/zoneinfo", reg_str);
+
+	bool ret = load_tzif_file(region_path, reg_str, region);
+
+	free(reg_str);
+	free(region_path);
+
+	return ret;
+}
+
+static int64_t month_to_seconds(int64_t month, bool is_leap) {
+	int64_t month_seconds[] = {
+		0,              31 * DAY_SEC,  59 * DAY_SEC,  90 * DAY_SEC,
+		120 * DAY_SEC, 151 * DAY_SEC, 181 * DAY_SEC, 212 * DAY_SEC,
+		243 * DAY_SEC, 273 * DAY_SEC, 304 * DAY_SEC, 334 * DAY_SEC,
+	};
+
+	int64_t t = month_seconds[month];
+	if (is_leap && month >= 2) {
+		t += DAY_SEC;
+	}
+
+	return t;
+}
+
+static bool is_leap_year(int64_t year) {
+	return year % 4 == 0 && ((year % 100) != 0 || (year % 400) == 0);
+}
+
+static int64_t get_year(int64_t t) {
+	uint64_t abs = t + UNIX_TO_ABSOLUTE;
+	uint64_t d = abs / SECONDS_PER_DAY;
+
+	uint64_t n = d / DAYS_PER_400_YEARS;
+	uint64_t y = 400 * n;
+	d -= DAYS_PER_400_YEARS * n;
+
+	n = d / DAYS_PER_100_YEARS;
+	n -= n >> 2;
+	y += 100 * n;
+	d -= DAYS_PER_100_YEARS * n;
+
+	n = d / DAYS_PER_4_YEARS;
+	y += 4 * n;
+	d -= DAYS_PER_4_YEARS * n;
+
+	n = d / 365;
+	n -= n >> 2;
+	y += n;
+	d -= 365 * n;
+
+	return ((int64_t)y + ABSOLUTE_ZERO_YEAR);
+}
+
+static int64_t trans_date_to_seconds(int64_t year, TZ_Transition_Date td) {
+	bool is_leap = is_leap_year(year);
+
+	struct tm year_start = {};
+	year_start.tm_year = year - 1900;
+	year_start.tm_mon = 1;
+	int64_t t = mktime(&year_start);
+	printf("%lld\n", t);
+
+	return 0;
+}
+
+static TZ_Record process_rrule(TZ_RRule rrule, int64_t cur) {
+	if (!rrule.has_dst) {
+		return (TZ_Record){
+			.time = cur,
+			.utc_offset = rrule.std_offset,
+			.shortname  = rrule.std_name,
+			.dst        = false,
+		};
+	}
+
+/*
+	int64_t year = get_year(cur);
+	printf("%lld\n", year);
+	int64_t std_secs = trans_date_to_seconds(year + 1900, rrule.std_date);
+	int64_t dst_secs = trans_date_to_seconds(year + 1900, rrule.dst_date);
+
+	printf("here?\n");
+*/
+	return (TZ_Record){
+		.time = cur,
+		.utc_offset = rrule.std_offset,
+		.shortname  = rrule.std_name,
+		.dst        = false,
+	};
+}
+
+static TZ_Record region_get_nearest(TZ_Region *tz, int64_t tm) {
+	if (tz->record_count == 0) {
+		return process_rrule(tz->rrule, tm);
+	}
+
+	int64_t n = tz->record_count;
+
+	int64_t tm_sec = tm;
+	int64_t last_time = tz->records[tz->record_count-1].time;
+	if (tm_sec > last_time) {
+		return process_rrule(tz->rrule, tm);
+	}
+
+	int64_t left = 0;
+	int64_t right = n;
+	while (left < right) {
+		int64_t mid = (int64_t)((uint64_t)(left + right) >> 1);
+		if (tz->records[mid].time < tm_sec) {
+			left = mid + 1;
+		} else {
+			right = mid;
+		}
+	}
+
+	int64_t idx = MAX(0, left - 1);
+	TZ_Record ret = tz->records[idx];
+	return ret;
+}
+
+DateTime datetime_now(void) {
+	return (DateTime){.time = time(NULL), .tz = NULL};
+}
+
+DateTime datetime_to_utc(DateTime dt) {
+	if (dt.tz == NULL) {
+		return dt;
+	}
+
+	TZ_Record record = region_get_nearest(dt.tz, dt.time);
+	int64_t adj_time = dt.time - record.utc_offset;
+	return (DateTime){.time = adj_time, .tz = NULL};
+}
+
+DateTime datetime_to_tz(DateTime in_dt, TZ_Region *tz) {
+	DateTime dt = in_dt;
+	if (dt.tz == tz) {
+		return dt;
+	}
+	if (dt.tz != NULL) {
+		dt = datetime_to_utc(dt);
+	}
+	if (tz == NULL) {
+		return dt;
+	}
+
+	TZ_Record record = region_get_nearest(tz, dt.time);
+
+	int64_t adj_time = dt.time + record.utc_offset;
+	return (DateTime){.time = adj_time, .tz = tz};
+}
+
+char *datetime_to_str(DateTime dt) {
+	time_t t = dt.time;
+	struct tm *tm = gmtime(&t);
+	char *buf = NULL;
+
+	if (dt.tz == NULL) {
+		asprintf(&buf, "%02d-%02d-%04d @ %02d:%02d:%02d UTC", tm->tm_mon, tm->tm_mday, 1900 + tm->tm_year, tm->tm_hour, tm->tm_min, tm->tm_sec);
+		return buf;
+	}
+
+	TZ_Record record = region_get_nearest(dt.tz, dt.time);
+
+	int hour = tm->tm_hour;
+	char *am_pm_str = "AM";
+	if (hour > 12) {
+		am_pm_str = "PM";
+		hour -= 12;
+	}
+
+	asprintf(&buf, "%02d-%02d-%04d @ %02d:%02d:%02d %s %s", tm->tm_mon, tm->tm_mday, 1900 + tm->tm_year, hour, tm->tm_min, tm->tm_sec, am_pm_str, record.shortname);
+	return buf;
+}
