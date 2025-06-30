@@ -30,11 +30,11 @@ void print_time(TZ_Time t) {
 }
 
 int main(void) {
-	TZ_Region *local = NULL;
-	if (!tz_region_load("local", &local)) return 1;
-
 	TZ_Region *est = NULL;
 	if (!tz_region_load("US/Eastern", &est)) return 1;
+
+	TZ_Region *local = NULL;
+	if (!tz_region_load_local(true, &local)) return 1;
 
 	TZ_Time utc_time   = tz_time_from_components((TZ_Date){2025, 1, 1}, (TZ_HMS){0, 0, 0}, NULL);
 	TZ_Time local_time = tz_time_to_tz(utc_time, local);
