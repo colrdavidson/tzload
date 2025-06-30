@@ -74,7 +74,8 @@ bool tz_parse_posix_tz(char *posix_tz, int tz_str_len, TZ_RRule *rrule);
 void tz_region_destroy(TZ_Region *region);
 void tz_rrule_destroy(TZ_RRule *rrule);
 
-TZ_Time tz_time_new(int64_t time);
+TZ_Time tz_time_from_unix_seconds(int64_t time);
+TZ_Time tz_time_from_components(TZ_Date date, TZ_HMS hms, TZ_Region *tz);
 TZ_Time tz_time_to_utc(TZ_Time t);
 TZ_Time tz_time_to_tz(TZ_Time in_t, TZ_Region *tz);
 int64_t tz_time_to_unix_seconds(TZ_Time t);

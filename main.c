@@ -34,15 +34,18 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
-	TZ_Time utc_now   = tz_time_new(time(NULL));
-	TZ_Time local_now = tz_time_to_tz(utc_now, local_region);
-	TZ_Time other_now = tz_time_to_tz(local_now, other_region);
-	TZ_Time back_now  = tz_time_to_utc(other_now);
+	TZ_Time utc_time   = tz_time_from_components((TZ_Date){2025, 1, 1}, (TZ_HMS){0, 0, 0}, NULL);
+	TZ_Time local_time = tz_time_to_tz(utc_time, local_region);
+	TZ_Time other_time = tz_time_to_tz(local_time, other_region);
+	TZ_Time back_time  = tz_time_to_utc(other_time);
 
-	print_time(utc_now);
-	print_time(local_now);
-	print_time(other_now);
-	print_time(back_now);
+	print_time(utc_time);
+	print_time(local_time);
+	print_time(other_time);
+	print_time(back_time);
+
+	TZ_Time utc_now = tz_time_from_unix_seconds(time(NULL));
+	print_time(tz_time_to_tz(utc_now, local_region));
 
 	tz_region_destroy(local_region);
 	tz_region_destroy(other_region);

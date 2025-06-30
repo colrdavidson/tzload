@@ -34,15 +34,18 @@ int main(void) {
 	TZ_Region *est = NULL;
 	if (!tz_region_load("US/Eastern", &est)) return 1;
 
-	TZ_Time utc_now     = tz_time_new(time(NULL));
-	TZ_Time local_now   = tz_time_to_tz(utc_now, local);
-	TZ_Time est_now     = tz_time_to_tz(local_now, est);
-	TZ_Time back_to_utc = tz_time_to_utc(est_now);
+	TZ_Time utc_time   = tz_time_from_components((TZ_Date){2025, 1, 1}, (TZ_HMS){0, 0, 0}, NULL);
+	TZ_Time local_time = tz_time_to_tz(utc_time, local);
+	TZ_Time est_time   = tz_time_to_tz(local_time, est);
+	TZ_Time back_time  = tz_time_to_utc(est_time);
 
-	print_time(utc_now);
-	print_time(local_now);
-	print_time(est_now);
-	print_time(back_to_utc);
+	print_time(utc_time);
+	print_time(local_time);
+	print_time(est_time);
+	print_time(back_time);
+
+	TZ_Time utc_now = tz_time_from_unix_seconds(time(NULL));
+	print_time(tz_time_to_tz(utc_now, local));
 
 	return 0;
 }

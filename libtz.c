@@ -1001,8 +1001,22 @@ static TZ_Record region_get_nearest(TZ_Region *tz, int64_t tm) {
 	return ret;
 }
 
-TZ_Time tz_time_new(int64_t time) {
+TZ_Time tz_time_from_unix_seconds(int64_t time) {
 	return (TZ_Time){.time = time, .tz = NULL};
+}
+
+TZ_Time tz_time_from_components(TZ_Date date, TZ_HMS hms, TZ_Region *tz) {
+	bool is_leap = is_leap_year(date.year);
+	int64_t time = year_to_time(date.year);
+
+	time += month_to_seconds(date.month - 1, is_leap);
+	time += (date.day - 1) * SECONDS_PER_DAY;
+
+	time += hms.hours * SECONDS_PER_HOUR;
+	time += hms.minutes * SECONDS_PER_MINUTE;
+	time += hms.seconds;
+
+	return (TZ_Time){.time = time, .tz = tz};
 }
 
 TZ_Time tz_time_to_utc(TZ_Time t) {
