@@ -29,7 +29,7 @@
 #define ABSOLUTE_TO_INTERNAL ((int64_t)(-9223371966579724800ll))
 #define INTERNAL_TO_ABSOLUTE (-ABSOLUTE_TO_INTERNAL)
 
-#define UNIX_TO_INTERNAL ((int64_t)((1969 * 365) + (1969 / 4) - (1969 / 100) + (1969 / 400) * SECONDS_PER_DAY))
+#define UNIX_TO_INTERNAL ((int64_t)((1969 * 365) + (1969 / 4) - (1969 / 100) + (1969 / 400)) * SECONDS_PER_DAY)
 #define UNIX_TO_ABSOLUTE (UNIX_TO_INTERNAL + INTERNAL_TO_ABSOLUTE)
 
 typedef struct {
@@ -366,9 +366,10 @@ static bool parse_posix_rrule(char *rrule_str, TZ_Transition_Date *date, int64_t
 	return false;
 }
 
-static bool parse_posix_tz(char *posix_tz, TZ_RRule *rrule) {
-	int tz_str_len = strlen(posix_tz);
+bool parse_posix_tz(char *posix_tz, TZ_RRule *rrule) {
+	int tz_str_len = strlen(posix_tz) - 1;
 	if (tz_str_len < 4) { return false; }
+
 
 	char *tz_str = posix_tz;
 
@@ -382,7 +383,8 @@ static bool parse_posix_tz(char *posix_tz, TZ_RRule *rrule) {
 	std_offset *= -1;
 	tz_str += end_idx;
 
-	if (*tz_str == '\n') {
+	int64_t rem_len = (tz_str - posix_tz) - tz_str_len;
+	if (rem_len == 0) {
 		*rrule = (TZ_RRule){
 			.has_dst = false,
 			.std_name = std_name,
@@ -744,7 +746,7 @@ static bool is_leap_year(int64_t year) {
 }
 
 static int64_t get_year(int64_t t) {
-	uint64_t abs = t + UNIX_TO_ABSOLUTE;
+	uint64_t abs = (uint64_t)(t + UNIX_TO_ABSOLUTE);
 	uint64_t d = abs / SECONDS_PER_DAY;
 
 	uint64_t n = d / DAYS_PER_400_YEARS;
@@ -768,14 +770,70 @@ static int64_t get_year(int64_t t) {
 	return ((int64_t)y + ABSOLUTE_ZERO_YEAR);
 }
 
+static int64_t leap_years_before(int64_t year) {
+	year -= 1;
+	return (year / 4) - (year / 100) + (year / 400);
+}
+static int64_t leap_years_between(int64_t start, int64_t end) {
+	return leap_years_before(end) - leap_years_before(start + 1);
+}
+
+static int64_t year_to_time(int64_t year) {
+	int64_t year_gap = year - 1970;
+	int64_t leap_count = leap_years_between(1970, year);
+	return ((year_gap * 365) + leap_count) * SECONDS_PER_DAY;
+}
+
+static int64_t last_day_of_month(int64_t year, int64_t month) {
+	int8_t month_days[] = {-1, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+	int64_t day = month_days[month];
+	if (month == 2 && is_leap_year(year)) {
+		day += 1;
+	}
+
+	return day;
+}
+
 static int64_t trans_date_to_seconds(int64_t year, TZ_Transition_Date td) {
 	bool is_leap = is_leap_year(year);
 
-	struct tm year_start = {};
-	year_start.tm_year = year - 1900;
-	year_start.tm_mon = 1;
-	int64_t t = mktime(&year_start);
-	printf("%lld\n", t);
+	int64_t t = year_to_time(year);
+
+	switch (td.type) {
+		case TZ_Month_Week_Day: {
+			if (td.month < 1) { return 0; }
+
+			t += month_to_seconds(td.month - 1, is_leap);
+			int64_t weekday = ((t + (4 * DAY_SEC)) % (7 * DAY_SEC)) / DAY_SEC;
+			int64_t days = td.day - weekday;
+
+			if (days < 0) { days += 7; }
+
+			int64_t month_daycount = last_day_of_month(year, td.month);
+			int64_t week = td.week;
+			if (week == 5 && (days + 28) >= month_daycount) {
+				week = 4;
+			}
+
+			t += DAY_SEC * (days + (7 * (week - 1)));
+			t += td.time;
+
+			return t;
+		} break;
+		case TZ_No_Leap: {
+			int64_t day = td.day;
+			if (day < 60 || !is_leap) {
+				day -= 1;
+			}
+			t += DAY_SEC * day;
+			return t;
+		} break;
+		case TZ_Leap: {
+			t += DAY_SEC * td.day;
+			return t;
+		} break;
+		default: { return 0; }
+	}
 
 	return 0;
 }
@@ -790,20 +848,38 @@ static TZ_Record process_rrule(TZ_RRule rrule, int64_t cur) {
 		};
 	}
 
-/*
 	int64_t year = get_year(cur);
-	printf("%lld\n", year);
-	int64_t std_secs = trans_date_to_seconds(year + 1900, rrule.std_date);
-	int64_t dst_secs = trans_date_to_seconds(year + 1900, rrule.dst_date);
+	int64_t std_secs = trans_date_to_seconds(year, rrule.std_date);
+	int64_t dst_secs = trans_date_to_seconds(year, rrule.dst_date);
 
-	printf("here?\n");
-*/
-	return (TZ_Record){
-		.time = cur,
-		.utc_offset = rrule.std_offset,
-		.shortname  = rrule.std_name,
-		.dst        = false,
+	TZ_Record records[] = {
+		{
+			.time = std_secs,
+			.utc_offset = rrule.std_offset,
+			.shortname = rrule.std_name,
+			.dst = false,
+		},
+		{
+			.time = dst_secs,
+			.utc_offset = rrule.dst_offset,
+			.shortname = rrule.dst_name,
+			.dst = true,
+		}
 	};
+	if (records[0].time > records[1].time) {
+		TZ_Record tmp = records[0];
+		records[0] = records[1];
+		records[1] = tmp;
+	}
+
+	for (int i = 0; i < 2; i++) {
+		TZ_Record record = records[i];
+		if (cur < record.time) {
+			return record;
+		}
+	}
+
+	return records[0];
 }
 
 static TZ_Record region_get_nearest(TZ_Region *tz, int64_t tm) {
@@ -886,6 +962,7 @@ char *datetime_to_str(DateTime dt) {
 		hour -= 12;
 	}
 
-	asprintf(&buf, "%02d-%02d-%04d @ %02d:%02d:%02d %s %s", tm->tm_mon, tm->tm_mday, 1900 + tm->tm_year, hour, tm->tm_min, tm->tm_sec, am_pm_str, record.shortname);
+	char *shortname = (record.shortname == NULL) ? "" : record.shortname;
+	asprintf(&buf, "%02d-%02d-%04d @ %02d:%02d:%02d %s %s", tm->tm_mon, tm->tm_mday, 1900 + tm->tm_year, hour, tm->tm_min, tm->tm_sec, am_pm_str, shortname);
 	return buf;
 }

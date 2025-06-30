@@ -55,6 +55,7 @@ typedef struct {
 } DateTime;
 
 bool region_load(char *region_name, TZ_Region **region);
+bool parse_posix_tz(char *posix_tz, TZ_RRule *rrule);
 
 DateTime datetime_now(void);
 DateTime datetime_to_utc(DateTime dt);
