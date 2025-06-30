@@ -103,6 +103,10 @@ static int tzif_data_block_size(TZif_Header *hdr, TZif_Version version) {
 		   hdr->isutcnt;
 }
 
+static bool is_whitespace(uint8_t ch) {
+	return (ch == ' ' || ch == '\n' || ch == '\t' || ch == '\r');
+}
+
 static bool is_alphabetic(uint8_t ch) {
 	//     ('A'   ->    'Z')        || ('a'    ->    'z')
 	return (ch > 0x40 && ch < 0x5B) || (ch > 0x60 && ch < 0x7B);
@@ -603,13 +607,68 @@ static void dynarr_append(DynArr *dyn, char *str) {
 	dyn->len += 1;
 }
 
+static bool load_entire_file(char *path, uint8_t **out_buf, size_t *len) {
+	int fd = open(path, O_RDONLY);
+	if (fd < 0) {
+		return false;
+	}
+
+	uint64_t file_length = lseek(fd, 0, SEEK_END);
+	lseek(fd, 0, SEEK_SET);
+
+	uint8_t *buffer = (uint8_t *)malloc(file_length);
+	read(fd, buffer, file_length);
+
+	close(fd);
+
+	*out_buf = buffer;
+	*len = file_length;
+	return true;
+}
+
+static bool load_tzif_file(char *path, char *name, TZ_Region **region) {
+	uint8_t *buffer = NULL;
+	size_t file_length = 0;
+	if (!load_entire_file(path, &buffer, &file_length)) return false;
+
+	bool ret = parse_tzif(buffer, file_length, name, region);
+	free(buffer);
+
+	return ret;
+}
+
+#if !defined(_WIN64) || !defined(_WIN32)
 static char *local_tz_name(void) {
 	char *local_str = getenv("TZ");
 	if (local_str != NULL) {
 		return strdup(local_str);
 	}
 
-	char *local_path = realpath("/etc/localtime", NULL);
+	char *orig_localtime_path = (char *)"/etc/localtime";
+	char *local_path = realpath(orig_localtime_path, NULL);
+	if (local_path == NULL) {
+		return strdup((char *)"UTC");
+	}
+
+	// FreeBSD copies rather than softlinks the local timezone file occasionally,
+	// Find the name of the timezone in /var/db/zoneinfo
+	if (strcmp(orig_localtime_path, local_path) == 0) {
+		uint8_t *buffer = NULL;
+		size_t len = 0;
+		if (!load_entire_file("/var/db/zoneinfo", &buffer, &len)) return strdup((char *)"UTC");
+
+		// trim the whitespace off the path
+		int i = len - 1;
+		for (; i >= 0; i--) {
+			if (!is_whitespace(buffer[i])) {
+				break;
+			}
+		}
+
+		char *local_tz = NULL;
+		asprintf(&local_tz, "%.*s", i + 1, buffer);
+		return local_tz;
+	}
 
 	DynArr path_chunks = {};
 	char *path_ptr = NULL;
@@ -633,28 +692,6 @@ static char *local_tz_name(void) {
 	return local_tz;
 }
 
-static bool load_tzif_file(char *path, char *name, TZ_Region **region) {
-	int zone_fd = open(path, O_RDONLY);
-	if (zone_fd < 0) {
-		printf("Failed to open %s\n", path);
-		return false;
-	}
-
-	uint64_t file_length = lseek(zone_fd, 0, SEEK_END);
-	lseek(zone_fd, 0, SEEK_SET);
-
-	uint8_t *buffer = (uint8_t *)malloc(file_length);
-	read(zone_fd, buffer, file_length);
-
-	bool ret = parse_tzif(buffer, file_length, name, region);
-
-	free(buffer);
-	close(zone_fd);
-
-	return ret;
-}
-
-// Load region on Linux
 static bool load_region(char *region_name, TZ_Region **region) {
 	if (!strcmp(region_name, "UTC")) {
 		*region = NULL;
@@ -684,6 +721,9 @@ static bool load_region(char *region_name, TZ_Region **region) {
 
 	return ret;
 }
+#else
+#error "Unsupported platform"
+#endif
 
 bool tz_region_load(char *region_name, TZ_Region **region) {
 	return load_region(region_name, region);
