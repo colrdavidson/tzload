@@ -81,3 +81,5 @@ char *tz_time_to_str(TZ_Time dt);
 
 TZ_Date tz_get_date(TZ_Time t);
 TZ_HMS  tz_get_hms(TZ_Time t);
+char *tz_shortname(TZ_Time t);
+bool  tz_is_dst(TZ_Time t);

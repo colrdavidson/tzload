@@ -1056,3 +1056,13 @@ char *tz_time_to_str(TZ_Time dt) {
 	asprintf(&buf, "%02d-%02d-%04lld @ %02d:%02d:%02d %s %s", date.month, date.day, date.year, hour, time.minutes, time.seconds, am_pm_str, shortname);
 	return buf;
 }
+
+char *tz_shortname(TZ_Time t) {
+	TZ_Record record = region_get_nearest(t.tz, t.time);
+	return (record.shortname == NULL) ? (char *)"" : record.shortname;
+}
+
+bool tz_is_dst(TZ_Time t) {
+	TZ_Record record = region_get_nearest(t.tz, t.time);
+	return record.dst;
+}
