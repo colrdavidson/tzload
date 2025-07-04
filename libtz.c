@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include <fcntl.h>
+#include <stdarg.h>
 #include <errno.h>
 
 #if defined(_WIN64) || defined(_WIN32)
@@ -29,7 +29,7 @@ static bool open_file(FILE **file, char *filename, char *mode) {
 #else
 static bool open_file(FILE **file, char *filename, char *mode) {
 	FILE *f = fopen(filename, mode);
-	if (f != NULL) {
+	if (f == NULL) {
 		return false;
 	}
 	*file = f;
@@ -106,7 +106,6 @@ typedef struct {
 static Slice slice_sub(Slice s, uint64_t start_idx) {
 	return (Slice){.data = s.data + start_idx, .len = s.len - start_idx};
 }
-
 
 static bool load_entire_file(char *path, uint8_t **out_buf, size_t *len) {
 	FILE *f;
@@ -820,7 +819,7 @@ static char *local_tz_name(bool check_env) {
 			}
 		}
 
-		char *local_tz = clonestr_sz(buffer, i + 1);
+		char *local_tz = clonestr_sz((char *)buffer, i + 1);
 		return local_tz;
 	}
 
@@ -837,7 +836,7 @@ static char *local_tz_name(bool check_env) {
 	if (strstr(path_dir, "zoneinfo")) {
 		local_tz = clonestr(path_file);
 	} else {
-		asprintf(&local_tz, "%s/%s", path_dir, path_file);
+		local_tz = str_join(2, "/", path_dir, path_file);
 	}
 
 	free(path_chunks.strs);
@@ -854,8 +853,7 @@ static bool load_region(char *region_name, TZ_Region **region) {
 
 	char *reg_str = clonestr(region_name);
 
-	char *region_path;
-	asprintf(&region_path, "%s/%s", "/usr/share/zoneinfo", reg_str);
+	char *region_path = str_join(2, "/", "/usr/share/zoneinfo", reg_str);
 
 	bool ret = load_tzif_file(region_path, reg_str, region);
 
