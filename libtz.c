@@ -1055,6 +1055,8 @@ char *iana_to_windows_tz(char *iana_name) {
 
 	uint16_t *iana_name_wstr = utf8_to_utf16(iana_name);
 	ucal_getWindowsTimeZoneID(iana_name_wstr, -1, wintz_name_buffer, sizeof(wintz_name_buffer), &status);
+	free(iana_name_wstr);
+
 	if (status != U_ZERO_ERROR) {
 		return NULL;
 	}
@@ -1084,7 +1086,6 @@ typedef struct __attribute__((packed)) {
 
 static bool generate_rrule_from_tzi(REG_TZI_FORMAT *tzi, TZ_Abbrev abbrevs, TZ_RRule *rrule) {
 	char *std_name = clonestr(abbrevs.std);
-
 	if (tzi->std_date.wMonth == 0) {
 		*rrule = (TZ_RRule){
 			.has_dst    = false,
@@ -1193,7 +1194,9 @@ exit_func:
 
 static bool load_local_region(bool check_env, TZ_Region **region) {
 	char *iana_name = local_tz_name();
-	return load_region(iana_name, region);
+	bool ret = load_region(iana_name, region);
+	free(iana_name);
+	return ret;
 }
 
 #endif
