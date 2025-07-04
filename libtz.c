@@ -538,17 +538,20 @@ static bool parse_posix_rrule(char *rrule_str, int rrule_str_len, TZ_Transition_
 }
 
 bool tz_parse_posix_tz(char *posix_tz, int tz_str_len, TZ_RRule *rrule) {
-	if (tz_str_len < 4) { return false; }
+	bool success = false;
+	if (tz_str_len < 4) { goto exit_func; }
+
+	char *std_name = NULL;
+	char *dst_name = NULL;
 
 	char *tz_str = posix_tz;
 
-	char *std_name = NULL;
 	int64_t end_idx = 0;
-	if (!parse_posix_tz_shortname(tz_str, &std_name, &end_idx)) { return false; }
+	if (!parse_posix_tz_shortname(tz_str, &std_name, &end_idx)) { goto exit_func; }
 
 	int64_t std_offset = 0;
 	tz_str += end_idx;
-	if (!parse_posix_tz_offset(tz_str, &std_offset, &end_idx)) { return false; }
+	if (!parse_posix_tz_offset(tz_str, &std_offset, &end_idx)) { goto free_shortnames; }
 	std_offset *= -1;
 	tz_str += end_idx;
 
@@ -567,29 +570,28 @@ bool tz_parse_posix_tz(char *posix_tz, int tz_str_len, TZ_RRule *rrule) {
 		return true;
 	}
 
-	char *dst_name = NULL;
 	int64_t dst_offset = std_offset + (60 * 60);
 	if (*tz_str != ',') {
-		if (!parse_posix_tz_shortname(tz_str, &dst_name, &end_idx)) { return false; }
+		if (!parse_posix_tz_shortname(tz_str, &dst_name, &end_idx)) { goto free_shortnames; }
 		tz_str += end_idx;
 
 		if (*tz_str != ',') {
-			if (!parse_posix_tz_offset(tz_str, &dst_offset, &end_idx)) { return false; }
+			if (!parse_posix_tz_offset(tz_str, &dst_offset, &end_idx)) { goto free_shortnames; }
 			dst_offset *= -1;
 			tz_str += end_idx;
 		}
 	}
-	if (*tz_str != ',') { return false; }
+	if (*tz_str != ',') { goto free_shortnames; }
 	tz_str += 1;
 
 	TZ_Transition_Date std_td;
 	rem_len = tz_str_len - (tz_str - posix_tz);
-	if (!parse_posix_rrule(tz_str, rem_len, &std_td, &end_idx)) { return false; }
+	if (!parse_posix_rrule(tz_str, rem_len, &std_td, &end_idx)) { goto free_shortnames; }
 	tz_str += end_idx;
 
 	TZ_Transition_Date dst_td;
 	rem_len = tz_str_len - (tz_str - posix_tz);
-	if (!parse_posix_rrule(tz_str, rem_len, &dst_td, &end_idx)) { return false; }
+	if (!parse_posix_rrule(tz_str, rem_len, &dst_td, &end_idx)) { goto free_shortnames; }
 	tz_str += end_idx;
 
 	*rrule = (TZ_RRule){
@@ -603,8 +605,15 @@ bool tz_parse_posix_tz(char *posix_tz, int tz_str_len, TZ_RRule *rrule) {
 		.dst_offset = dst_offset,
 		.dst_date   = dst_td,
 	};
+	success = true;
+	return success;
 
-	return true;
+free_shortnames:
+	free(dst_name);
+	free(std_name);
+
+exit_func:
+	return success;
 }
 
 bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out_region) {
