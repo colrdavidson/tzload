@@ -1,3 +1,6 @@
 tzload
+*.pdb
+*.ilk
+*.exe
 *.swp
 *.dSYM

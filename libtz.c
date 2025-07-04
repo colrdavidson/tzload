@@ -3,14 +3,100 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
 
+#if defined(_WIN64) || defined(_WIN32)
+#define PLATFORM_WINDOWS
+#endif
+
+#if defined(PLATFORM_WINDOWS)
+#define NOCOMM
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <icu.h>
+#pragma comment(lib, "icu")
+#pragma comment(lib, "Advapi32")
+#endif
+
 #include "libtz.h"
 
+// SECTION: Platform-specific Utilities
+#if defined(PLATFORM_WINDOWS)
+static bool open_file(FILE **file, char *filename, char *mode) {
+	return !!fopen_s(file, filename, mode);
+}
+#else
+static bool open_file(FILE **file, char *filename, char *mode) {
+	FILE *f = fopen(filename, mode);
+	if (f != NULL) {
+		return false;
+	}
+	*file = f;
+	return true;
+}
+#endif
+
 // SECTION: Utilities
+#define ARR_LEN(x) (sizeof(x) / sizeof(*(x)))
+#define NTOH_64(x) __builtin_bswap64(x)
+#define NTOH_32(x) __builtin_bswap32(x)
+#define NTOH_16(x) __builtin_bswap16(x)
+
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
+
+static char *clonestr(char *str) {
+	size_t len = strlen(str);
+	char *out = (char *)malloc(len+1);
+	memcpy(out, str, len);
+	out[len] = 0;
+	return out;
+}
+
+static char *clonestr_sz(char *str, size_t len) {
+	char *out = (char *)malloc(len+1);
+	memcpy(out, str, len);
+	out[len] = 0;
+	return out;
+}
+
+static char *str_join(int count, char *join_str, ...) {
+	va_list args;
+
+	size_t str_len = 0;
+	size_t join_sz = strlen(join_str);
+
+	va_start(args, join_str);
+	for (int i = 0; i < count; i++) {
+		char *str = va_arg(args, char *);
+		str_len += strlen(str);
+		if ((i + 1) < count) {
+			str_len += join_sz;
+		}
+	}
+	va_end(args);
+
+	char *ret = malloc(str_len + 1);
+	ret[str_len] = 0;
+
+	size_t ret_tail = 0;
+
+	va_start(args, join_str);
+	for (int i = 0; i < count; i++) {
+		char *str = va_arg(args, char *);
+
+		size_t str_len = strlen(str);
+		memcpy(ret + ret_tail, str, str_len);
+		ret_tail += str_len;
+		if ((i + 1) < count) {
+			memcpy(ret + ret_tail, join_str, join_sz);
+			ret_tail += join_sz;
+		}
+	}
+	va_end(args);
+
+	return ret;
+}
 
 typedef struct {
 	uint8_t *data;
@@ -21,42 +107,23 @@ static Slice slice_sub(Slice s, uint64_t start_idx) {
 	return (Slice){.data = s.data + start_idx, .len = s.len - start_idx};
 }
 
-typedef struct {
-	char **strs;
-	uint64_t len;
-	uint64_t cap;
-} DynArr;
-
-static void dynarr_append(DynArr *dyn, char *str) {
-	if (dyn->len + 1 > dyn->cap) {
-		dyn->cap = MAX(8, dyn->cap * 2);
-		dyn->strs = (char **)realloc(dyn->strs, sizeof(char *) * dyn->cap);
-	}
-	dyn->strs[dyn->len] = str;
-	dyn->len += 1;
-}
 
 static bool load_entire_file(char *path, uint8_t **out_buf, size_t *len) {
-	int fd = open(path, O_RDONLY);
-	if (fd < 0) {
-		return false;
-	}
+	FILE *f;
+	if (!open_file(&f, path, "rb")) { return false; }
 
-	uint64_t file_length = lseek(fd, 0, SEEK_END);
-	lseek(fd, 0, SEEK_SET);
+	fseek(f, 0, SEEK_END);
+	uint64_t file_length = ftell(f);
+	fseek(f, 0, SEEK_SET);
 
 	uint8_t *buffer = (uint8_t *)malloc(file_length);
-	read(fd, buffer, file_length);
+	fread(buffer, file_length, 1, f);
 
-	close(fd);
+	fclose(f);
 
 	*out_buf = buffer;
 	*len = file_length;
 	return true;
-}
-
-static bool is_whitespace(uint8_t ch) {
-	return (ch == ' ' || ch == '\n' || ch == '\t' || ch == '\r');
 }
 
 static bool is_alphabetic(uint8_t ch) {
@@ -198,13 +265,13 @@ typedef struct __attribute__((packed)) {
 } Local_Time_Type;
 
 static void tzif_hdr_to_native(TZif_Header *hdr) {
-	hdr->magic = ntohl(hdr->magic);
-	hdr->isutcnt = ntohl(hdr->isutcnt);
-	hdr->isstdcnt = ntohl(hdr->isstdcnt);
-	hdr->leapcnt = ntohl(hdr->leapcnt);
-	hdr->timecnt = ntohl(hdr->timecnt);
-	hdr->typecnt = ntohl(hdr->typecnt);
-	hdr->charcnt = ntohl(hdr->charcnt);
+	hdr->magic    = NTOH_32(hdr->magic);
+	hdr->isutcnt  = NTOH_32(hdr->isutcnt);
+	hdr->isstdcnt = NTOH_32(hdr->isstdcnt);
+	hdr->leapcnt  = NTOH_32(hdr->leapcnt);
+	hdr->timecnt  = NTOH_32(hdr->timecnt);
+	hdr->typecnt  = NTOH_32(hdr->typecnt);
+	hdr->charcnt  = NTOH_32(hdr->charcnt);
 }
 
 static int tzif_data_block_size(TZif_Header *hdr, TZif_Version version) {
@@ -268,10 +335,10 @@ static bool parse_posix_tz_shortname(char *str, char **out, int64_t *idx) {
 	int end_idx = i;
 	if (was_quoted) {
 		end_idx += 1;
-		asprintf(out, "%.*s", end_idx, str+1);
+		*out = clonestr_sz(str+1, end_idx);
 		*idx = end_idx;
 	} else {
-		asprintf(out, "%.*s", end_idx, str);
+		*out = clonestr_sz(str, end_idx);
 		*idx = end_idx;
 	}
 
@@ -556,7 +623,7 @@ bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out
 	int64_t *transition_times = (int64_t *)s.data;
 	for (int i = 0; i < real_hdr->timecnt; i++) {
 		int64_t *time = &transition_times[i];
-		*time = ntohll(*time);
+		*time = NTOH_64(*time);
 		if (*time < BIG_BANG_ISH) {
 			return false;
 		}
@@ -575,7 +642,7 @@ bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out
 	Local_Time_Type *local_time_types = (Local_Time_Type *)s.data;
 	for (int i = 0; i < real_hdr->typecnt; i++) {
 		Local_Time_Type *ltt = &local_time_types[i];
-		ltt->utoff = ntohl(ltt->utoff);
+		ltt->utoff = NTOH_32(ltt->utoff);
 
 		// UT offset should be > -25 and < 26 hours
 		if ((int)ltt->utoff < -89999 || (int)ltt->utoff > 93599) {
@@ -598,8 +665,8 @@ bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out
 	Leapsecond_Record *leapsecond_records = (Leapsecond_Record *)s.data;
 	for (int i = 0; i < real_hdr->leapcnt; i++) {
 		Leapsecond_Record *record = &leapsecond_records[i];
-		record->occur = ntohll(record->occur);
-		record->corr = ntohl(record->corr);
+		record->occur = NTOH_64(record->occur);
+		record->corr = NTOH_32(record->corr);
 	}
 	if (real_hdr->leapcnt > 0 && leapsecond_records[0].occur < 0) {
 		return false;
@@ -661,7 +728,7 @@ bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out
 		Local_Time_Type ltt = local_time_types[i];
 
 		Slice ltt_name_str = slice_sub(str_table, ltt.idx);
-		ltt_names[i] = strndup((char *)ltt_name_str.data, ltt_name_str.len);
+		ltt_names[i] = clonestr_sz((char *)ltt_name_str.data, ltt_name_str.len);
 	}
 
 	TZ_Record *records = (TZ_Record *)malloc(real_hdr->timecnt * sizeof(TZ_Record));
@@ -684,7 +751,7 @@ bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out
 		.record_count    = real_hdr->timecnt,
 		.shortnames      = ltt_names,
 		.shortname_count = real_hdr->typecnt,
-		.name            = strdup(region_name),
+		.name            = clonestr(region_name),
 	};
 	*out_region = region;
 	return true;
@@ -702,19 +769,40 @@ static bool load_tzif_file(char *path, char *name, TZ_Region **region) {
 }
 
 // SECTION: Platform-specific TZ_Region Functions
-#if !defined(_WIN64) || !defined(_WIN32)
+#if !defined(PLATFORM_WINDOWS)
+
+typedef struct {
+	char **strs;
+	uint64_t len;
+	uint64_t cap;
+} DynArr;
+
+static void dynarr_append(DynArr *dyn, char *str) {
+	if (dyn->len + 1 > dyn->cap) {
+		dyn->cap = MAX(8, dyn->cap * 2);
+		dyn->strs = (char **)realloc(dyn->strs, sizeof(char *) * dyn->cap);
+	}
+	dyn->strs[dyn->len] = str;
+	dyn->len += 1;
+}
+
+static bool is_whitespace(uint8_t ch) {
+	return (ch == ' ' || ch == '\n' || ch == '\t' || ch == '\r');
+}
+
+
 static char *local_tz_name(bool check_env) {
 	if (check_env) {
 		char *local_str = getenv("TZ");
 		if (local_str != NULL) {
-			return strdup(local_str);
+			return clonestr(local_str);
 		}
 	}
 
 	char *orig_localtime_path = (char *)"/etc/localtime";
 	char *local_path = realpath(orig_localtime_path, NULL);
 	if (local_path == NULL) {
-		return strdup((char *)"UTC");
+		return clonestr((char *)"UTC");
 	}
 
 	// FreeBSD copies rather than softlinks the local timezone file occasionally,
@@ -722,7 +810,7 @@ static char *local_tz_name(bool check_env) {
 	if (strcmp(orig_localtime_path, local_path) == 0) {
 		uint8_t *buffer = NULL;
 		size_t len = 0;
-		if (!load_entire_file("/var/db/zoneinfo", &buffer, &len)) return strdup((char *)"UTC");
+		if (!load_entire_file("/var/db/zoneinfo", &buffer, &len)) return clonestr((char *)"UTC");
 
 		// trim the whitespace off the path
 		int i = len - 1;
@@ -732,8 +820,7 @@ static char *local_tz_name(bool check_env) {
 			}
 		}
 
-		char *local_tz = NULL;
-		asprintf(&local_tz, "%.*s", i + 1, buffer);
+		char *local_tz = clonestr_sz(buffer, i + 1);
 		return local_tz;
 	}
 
@@ -748,7 +835,7 @@ static char *local_tz_name(bool check_env) {
 	char *path_file = path_chunks.strs[path_chunks.len - 1];
 	char *path_dir = path_chunks.strs[path_chunks.len - 2];
 	if (strstr(path_dir, "zoneinfo")) {
-		local_tz = strdup(path_file);
+		local_tz = clonestr(path_file);
 	} else {
 		asprintf(&local_tz, "%s/%s", path_dir, path_file);
 	}
@@ -765,7 +852,7 @@ static bool load_region(char *region_name, TZ_Region **region) {
 		return true;
 	}
 
-	char *reg_str = strdup(region_name);
+	char *reg_str = clonestr(region_name);
 
 	char *region_path;
 	asprintf(&region_path, "%s/%s", "/usr/share/zoneinfo", reg_str);
@@ -944,11 +1031,171 @@ static TZ_AbbrevMap tz_abbrevs[] = {
 	{"Tonga Standard Time",             {"+13", "+13"}},     // Pacific/Tongatapu
 };
 
+char *utf16_to_utf8(uint16_t *wstr) {
+	int str_sz = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL);
+	if (str_sz == 0) {
+		return "";
+	}
+
+	char *out_str = (char *)malloc(str_sz);
+	WideCharToMultiByte(CP_UTF8, 0, wstr, -1, out_str, str_sz, NULL, NULL);
+	return out_str;
+}
+uint16_t *utf8_to_utf16(char *str) {
+	int wstr_sz = MultiByteToWideChar(CP_UTF8, 0, str, -1, NULL, 0);
+	if (wstr_sz == 0) {
+		return L"";
+	}
+
+	uint16_t *out_wstr = (uint16_t *)malloc(wstr_sz * sizeof(int16_t));
+	MultiByteToWideChar(CP_UTF8, 0, str, -1, out_wstr, wstr_sz);
+	return out_wstr;
+}
+
+char *iana_to_windows_tz(char *iana_name) {
+	UChar wintz_name_buffer[128] = {};
+	UErrorCode status = {};
+
+	uint16_t *iana_name_wstr = utf8_to_utf16(iana_name);
+	ucal_getWindowsTimeZoneID(iana_name_wstr, -1, wintz_name_buffer, sizeof(wintz_name_buffer), &status);
+	if (status != U_ZERO_ERROR) {
+		return NULL;
+	}
+
+	return utf16_to_utf8(wintz_name_buffer);
+}
+
+char *local_tz_name(void) {
+	UChar iana_name_buffer[128] = {};
+	UErrorCode status = {};
+
+	ucal_getDefaultTimeZone(iana_name_buffer, sizeof(iana_name_buffer), &status);
+	if (status != U_ZERO_ERROR) {
+		return NULL;
+	}
+
+	return utf16_to_utf8(iana_name_buffer);
+}
+
+typedef struct __attribute__((packed)) {
+	LONG bias;
+	LONG std_bias;
+	LONG dst_bias;
+	SYSTEMTIME std_date;
+	SYSTEMTIME dst_date;
+} REG_TZI_FORMAT;
+
+static bool generate_rrule_from_tzi(REG_TZI_FORMAT *tzi, TZ_Abbrev abbrevs, TZ_RRule *rrule) {
+	char *std_name = clonestr(abbrevs.std);
+
+	if (tzi->std_date.wMonth == 0) {
+		*rrule = (TZ_RRule){
+			.has_dst    = false,
+
+			.std_name   = std_name,
+			.std_offset = -(((int64_t)tzi->bias) + ((int64_t)tzi->std_bias)) * 60,
+			.dst_date   = (TZ_Transition_Date){
+				.type   = TZ_Month_Week_Day,
+				.month  = (uint8_t)tzi->std_date.wMonth,
+				.week   = (uint8_t)tzi->std_date.wDay,
+				.day    = tzi->std_date.wDayOfWeek,
+				.time   = (((int64_t)tzi->std_date.wHour) * 60 * 60) + ((int64_t)(tzi->std_date.wMinute) * 60) + ((int64_t)(tzi->std_date.wSecond)),
+			},
+		};
+		return true;
+	}
+
+	char *dst_name = clonestr(abbrevs.dst);
+	*rrule = (TZ_RRule){
+		.has_dst    = true,
+
+		.std_name   = std_name,
+		.std_offset = -(((int64_t)tzi->bias) + ((int64_t)tzi->std_bias)) * 60,
+		.dst_date   = (TZ_Transition_Date){
+			.type   = TZ_Month_Week_Day,
+			.month  = (uint8_t)tzi->std_date.wMonth,
+			.week   = (uint8_t)tzi->std_date.wDay,
+			.day    = tzi->std_date.wDayOfWeek,
+			.time   = (((int64_t)tzi->std_date.wHour) * 60 * 60) + ((int64_t)(tzi->std_date.wMinute) * 60) + ((int64_t)(tzi->std_date.wSecond)),
+		},
+
+		.dst_name   = dst_name,
+		.dst_offset = -(((int64_t)tzi->bias) + ((int64_t)tzi->dst_bias)) * 60,
+		.std_date   = (TZ_Transition_Date){
+			.type   = TZ_Month_Week_Day,
+			.month  = (uint8_t)tzi->dst_date.wMonth,
+			.week   = (uint8_t)tzi->dst_date.wDay,
+			.day    = tzi->dst_date.wDayOfWeek,
+			.time   = (((int64_t)tzi->dst_date.wHour) * 60 * 60) + ((int64_t)(tzi->dst_date.wMinute) * 60) + ((int64_t)(tzi->dst_date.wSecond)),
+		},
+	};
+
+	return true;
+}
+
 static bool load_region(char *region_name, TZ_Region **region) {
-	return false;
+	bool success = false;
+
+	char *wintz_name = iana_to_windows_tz(region_name);
+	if (!wintz_name) {
+		goto exit_func;
+	}
+
+	bool abbrevs_found = false;
+	TZ_Abbrev abbrevs = {};
+	for (int i = 0; i < ARR_LEN(tz_abbrevs); i++) {
+		TZ_AbbrevMap pair = tz_abbrevs[i];
+		if (!strcmp(pair.key, wintz_name)) {
+			abbrevs = pair.value;
+			abbrevs_found = true;
+			break;
+		}
+	}
+	if (!abbrevs_found) {
+		goto free_wintz;
+	}
+	if (!strcmp(abbrevs.std, "UTC") && !strcmp(abbrevs.dst, abbrevs.std)) {
+		goto free_wintz;
+	}
+
+	char *reg_key_base = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Time Zones";
+	char *tz_key = str_join(2, "\\", reg_key_base, wintz_name);
+	uint16_t *tz_key_wstr = utf8_to_utf16(tz_key);
+
+	HKEY key = {};
+	int res = RegOpenKeyExW(HKEY_LOCAL_MACHINE, tz_key_wstr, 0, KEY_READ, &key);
+
+	if (res != ERROR_SUCCESS) { goto free_keys; }
+
+
+	REG_TZI_FORMAT tzi = {};
+	unsigned long size = sizeof(REG_TZI_FORMAT);
+	res = RegGetValueW(key, NULL, L"TZI", RRF_RT_ANY, NULL, &tzi, &size);
+	if (res != 0) { goto free_keys; }
+
+	TZ_RRule rrule = {};
+	if (!generate_rrule_from_tzi(&tzi, abbrevs, &rrule)) { goto free_keys; }
+
+	TZ_Region *out_region = (TZ_Region *)malloc(sizeof(TZ_Region));
+	*out_region = (TZ_Region){
+		.name  = clonestr(region_name),
+		.rrule = rrule,
+	};
+	*region = out_region;
+	success = true;
+
+free_keys:
+	free(tz_key);
+	free(tz_key_wstr);
+free_wintz:
+	free(wintz_name);
+
+exit_func:
+	return success;
 }
 static bool load_local_region(bool check_env, TZ_Region **region) {
-	return false;
+	char *iana_name = local_tz_name();
+	return load_region(iana_name, region);
 }
 #endif
 
