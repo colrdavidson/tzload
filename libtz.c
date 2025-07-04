@@ -26,7 +26,48 @@
 static bool open_file(FILE **file, char *filename, char *mode) {
 	return !!fopen_s(file, filename, mode);
 }
+
+char *utf16_to_utf8(uint16_t *wstr) {
+	int str_sz = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL);
+	if (str_sz == 0) {
+		return "";
+	}
+
+	char *out_str = (char *)malloc(str_sz);
+	WideCharToMultiByte(CP_UTF8, 0, wstr, -1, out_str, str_sz, NULL, NULL);
+	return out_str;
+}
+uint16_t *utf8_to_utf16(char *str) {
+	int wstr_sz = MultiByteToWideChar(CP_UTF8, 0, str, -1, NULL, 0);
+	if (wstr_sz == 0) {
+		return L"";
+	}
+
+	uint16_t *out_wstr = (uint16_t *)malloc(wstr_sz * sizeof(int16_t));
+	MultiByteToWideChar(CP_UTF8, 0, str, -1, out_wstr, wstr_sz);
+	return out_wstr;
+}
+
 #else
+typedef struct {
+	char **strs;
+	uint64_t len;
+	uint64_t cap;
+} DynArr;
+
+static void dynarr_append(DynArr *dyn, char *str) {
+	if (dyn->len + 1 > dyn->cap) {
+		dyn->cap = MAX(8, dyn->cap * 2);
+		dyn->strs = (char **)realloc(dyn->strs, sizeof(char *) * dyn->cap);
+	}
+	dyn->strs[dyn->len] = str;
+	dyn->len += 1;
+}
+
+static bool is_whitespace(uint8_t ch) {
+	return (ch == ' ' || ch == '\n' || ch == '\t' || ch == '\r');
+}
+
 static bool open_file(FILE **file, char *filename, char *mode) {
 	FILE *f = fopen(filename, mode);
 	if (f == NULL) {
@@ -769,27 +810,6 @@ static bool load_tzif_file(char *path, char *name, TZ_Region **region) {
 
 // SECTION: Platform-specific TZ_Region Functions
 #if !defined(PLATFORM_WINDOWS)
-
-typedef struct {
-	char **strs;
-	uint64_t len;
-	uint64_t cap;
-} DynArr;
-
-static void dynarr_append(DynArr *dyn, char *str) {
-	if (dyn->len + 1 > dyn->cap) {
-		dyn->cap = MAX(8, dyn->cap * 2);
-		dyn->strs = (char **)realloc(dyn->strs, sizeof(char *) * dyn->cap);
-	}
-	dyn->strs[dyn->len] = str;
-	dyn->len += 1;
-}
-
-static bool is_whitespace(uint8_t ch) {
-	return (ch == ' ' || ch == '\n' || ch == '\t' || ch == '\r');
-}
-
-
 static char *local_tz_name(bool check_env) {
 	if (check_env) {
 		char *local_str = getenv("TZ");
@@ -1029,27 +1049,6 @@ static TZ_AbbrevMap tz_abbrevs[] = {
 	{"Tonga Standard Time",             {"+13", "+13"}},     // Pacific/Tongatapu
 };
 
-char *utf16_to_utf8(uint16_t *wstr) {
-	int str_sz = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL);
-	if (str_sz == 0) {
-		return "";
-	}
-
-	char *out_str = (char *)malloc(str_sz);
-	WideCharToMultiByte(CP_UTF8, 0, wstr, -1, out_str, str_sz, NULL, NULL);
-	return out_str;
-}
-uint16_t *utf8_to_utf16(char *str) {
-	int wstr_sz = MultiByteToWideChar(CP_UTF8, 0, str, -1, NULL, 0);
-	if (wstr_sz == 0) {
-		return L"";
-	}
-
-	uint16_t *out_wstr = (uint16_t *)malloc(wstr_sz * sizeof(int16_t));
-	MultiByteToWideChar(CP_UTF8, 0, str, -1, out_wstr, wstr_sz);
-	return out_wstr;
-}
-
 char *iana_to_windows_tz(char *iana_name) {
 	UChar wintz_name_buffer[128] = {};
 	UErrorCode status = {};
@@ -1191,10 +1190,12 @@ free_wintz:
 exit_func:
 	return success;
 }
+
 static bool load_local_region(bool check_env, TZ_Region **region) {
 	char *iana_name = local_tz_name();
 	return load_region(iana_name, region);
 }
+
 #endif
 
 // SECTION: Generic TZ_Region Functions
