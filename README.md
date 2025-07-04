@@ -49,6 +49,9 @@ int main(void) {
 	TZ_Time utc_now = tz_time_from_unix_seconds(time(NULL));
 	print_time(tz_time_to_tz(utc_now, local));
 
+	tz_region_destroy(est);
+	tz_region_destroy(local);
+
 	return 0;
 }
 ```
