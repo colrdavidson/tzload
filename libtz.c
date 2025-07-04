@@ -86,6 +86,15 @@ static bool open_file(FILE **file, char *filename, char *mode) {
 #endif
 
 // SECTION: Utilities
+static bool copystr_sz(char *out, size_t sz, char *str) {
+	size_t len = strlen(str);
+	if ((len + 1) >= sz) return false;
+
+	memcpy(out, str, len);
+	out[len] = 0;
+
+	return true;
+}
 static char *clonestr(char *str) {
 	size_t len = strlen(str);
 	char *out = (char *)malloc(len+1);
@@ -538,20 +547,18 @@ static bool parse_posix_rrule(char *rrule_str, int rrule_str_len, TZ_Transition_
 }
 
 bool tz_parse_posix_tz(char *posix_tz, int tz_str_len, TZ_RRule *rrule) {
-	bool success = false;
-	if (tz_str_len < 4) { goto exit_func; }
-
-	char *std_name = NULL;
-	char *dst_name = NULL;
+	if (tz_str_len < 4) { return false; }
 
 	char *tz_str = posix_tz;
+	char std_name[33] = {};
+	char dst_name[33] = {};
 
 	int64_t end_idx = 0;
-	if (!parse_posix_tz_shortname(tz_str, &std_name, &end_idx)) { goto exit_func; }
+	if (!parse_posix_tz_shortname(tz_str, (char **)&std_name, &end_idx)) { return false; }
 
 	int64_t std_offset = 0;
 	tz_str += end_idx;
-	if (!parse_posix_tz_offset(tz_str, &std_offset, &end_idx)) { goto free_shortnames; }
+	if (!parse_posix_tz_offset(tz_str, &std_offset, &end_idx)) { return false; }
 	std_offset *= -1;
 	tz_str += end_idx;
 
@@ -559,7 +566,7 @@ bool tz_parse_posix_tz(char *posix_tz, int tz_str_len, TZ_RRule *rrule) {
 	if (rem_len == 0) {
 		*rrule = (TZ_RRule){
 			.has_dst = false,
-			.std_name = std_name,
+
 			.std_offset = std_offset,
 			.std_date = (TZ_Transition_Date){
 				.type = TZ_Leap,
@@ -567,53 +574,46 @@ bool tz_parse_posix_tz(char *posix_tz, int tz_str_len, TZ_RRule *rrule) {
 				.time = TWO_AM,
 			},
 		};
+		if (!copystr_sz(rrule->std_name, sizeof(std_name), std_name)) return false;
 		return true;
 	}
 
 	int64_t dst_offset = std_offset + (60 * 60);
 	if (*tz_str != ',') {
-		if (!parse_posix_tz_shortname(tz_str, &dst_name, &end_idx)) { goto free_shortnames; }
+		if (!parse_posix_tz_shortname(tz_str, (char **)&dst_name, &end_idx)) { return false; }
 		tz_str += end_idx;
 
 		if (*tz_str != ',') {
-			if (!parse_posix_tz_offset(tz_str, &dst_offset, &end_idx)) { goto free_shortnames; }
+			if (!parse_posix_tz_offset(tz_str, &dst_offset, &end_idx)) { return false; }
 			dst_offset *= -1;
 			tz_str += end_idx;
 		}
 	}
-	if (*tz_str != ',') { goto free_shortnames; }
+	if (*tz_str != ',') { return false; }
 	tz_str += 1;
 
 	TZ_Transition_Date std_td;
 	rem_len = tz_str_len - (tz_str - posix_tz);
-	if (!parse_posix_rrule(tz_str, rem_len, &std_td, &end_idx)) { goto free_shortnames; }
+	if (!parse_posix_rrule(tz_str, rem_len, &std_td, &end_idx)) { return false; }
 	tz_str += end_idx;
 
 	TZ_Transition_Date dst_td;
 	rem_len = tz_str_len - (tz_str - posix_tz);
-	if (!parse_posix_rrule(tz_str, rem_len, &dst_td, &end_idx)) { goto free_shortnames; }
+	if (!parse_posix_rrule(tz_str, rem_len, &dst_td, &end_idx)) { return false; }
 	tz_str += end_idx;
 
 	*rrule = (TZ_RRule){
 		.has_dst = true,
 
-		.std_name = std_name,
 		.std_offset = std_offset,
 		.std_date   = std_td,
 
-		.dst_name = dst_name,
 		.dst_offset = dst_offset,
 		.dst_date   = dst_td,
 	};
-	success = true;
-	return success;
-
-free_shortnames:
-	free(dst_name);
-	free(std_name);
-
-exit_func:
-	return success;
+	if (!copystr_sz(rrule->std_name, sizeof(std_name), std_name)) return false;
+	if (!copystr_sz(rrule->dst_name, sizeof(dst_name), dst_name)) return false;
+	return true;
 }
 
 bool parse_tzif(uint8_t *buffer, size_t size, char *region_name, TZ_Region **out_region) {
@@ -881,7 +881,6 @@ static bool load_region(char *region_name, TZ_Region **region) {
 	}
 
 	char *reg_str = clonestr(region_name);
-
 	char *region_path = str_join(2, "/", "/usr/share/zoneinfo", reg_str);
 
 	bool ret = load_tzif_file(region_path, reg_str, region);
@@ -1094,12 +1093,10 @@ typedef struct __attribute__((packed)) {
 } REG_TZI_FORMAT;
 
 static bool generate_rrule_from_tzi(REG_TZI_FORMAT *tzi, TZ_Abbrev abbrevs, TZ_RRule *rrule) {
-	char *std_name = clonestr(abbrevs.std);
 	if (tzi->std_date.wMonth == 0) {
 		*rrule = (TZ_RRule){
 			.has_dst    = false,
 
-			.std_name   = std_name,
 			.std_offset = -(((int64_t)tzi->bias) + ((int64_t)tzi->std_bias)) * 60,
 			.dst_date   = (TZ_Transition_Date){
 				.type   = TZ_Month_Week_Day,
@@ -1109,14 +1106,13 @@ static bool generate_rrule_from_tzi(REG_TZI_FORMAT *tzi, TZ_Abbrev abbrevs, TZ_R
 				.time   = (((int64_t)tzi->std_date.wHour) * 60 * 60) + ((int64_t)(tzi->std_date.wMinute) * 60) + ((int64_t)(tzi->std_date.wSecond)),
 			},
 		};
+		if (!copystr_sz(rrule->std_name, sizeof(rrule->std_name), abbrevs.std)) return false;
 		return true;
 	}
 
-	char *dst_name = clonestr(abbrevs.dst);
 	*rrule = (TZ_RRule){
 		.has_dst    = true,
 
-		.std_name   = std_name,
 		.std_offset = -(((int64_t)tzi->bias) + ((int64_t)tzi->std_bias)) * 60,
 		.dst_date   = (TZ_Transition_Date){
 			.type   = TZ_Month_Week_Day,
@@ -1126,7 +1122,6 @@ static bool generate_rrule_from_tzi(REG_TZI_FORMAT *tzi, TZ_Abbrev abbrevs, TZ_R
 			.time   = (((int64_t)tzi->std_date.wHour) * 60 * 60) + ((int64_t)(tzi->std_date.wMinute) * 60) + ((int64_t)(tzi->std_date.wSecond)),
 		},
 
-		.dst_name   = dst_name,
 		.dst_offset = -(((int64_t)tzi->bias) + ((int64_t)tzi->dst_bias)) * 60,
 		.std_date   = (TZ_Transition_Date){
 			.type   = TZ_Month_Week_Day,
@@ -1137,6 +1132,8 @@ static bool generate_rrule_from_tzi(REG_TZI_FORMAT *tzi, TZ_Abbrev abbrevs, TZ_R
 		},
 	};
 
+	if (!copystr_sz(rrule->std_name, sizeof(rrule->std_name), abbrevs.std)) return false;
+	if (!copystr_sz(rrule->dst_name, sizeof(rrule->dst_name), abbrevs.dst)) return false;
 	return true;
 }
 
@@ -1227,11 +1224,6 @@ bool tz_region_load_from_buffer(uint8_t *buffer, size_t sz, char *reg_str, TZ_Re
 	return parse_tzif(buffer, sz, reg_str, region);
 }
 
-void tz_rrule_destroy(TZ_RRule *rrule) {
-	free(rrule->std_name);
-	free(rrule->dst_name);
-}
-
 void tz_region_destroy(TZ_Region *region) {
 	if (region == NULL) return;
 
@@ -1241,7 +1233,6 @@ void tz_region_destroy(TZ_Region *region) {
 	free(region->shortnames);
 	free(region->records);
 	free(region->name);
-	tz_rrule_destroy(&region->rrule);
 	free(region);
 }
 
@@ -1346,31 +1337,31 @@ static int64_t trans_date_to_seconds(int64_t year, TZ_Transition_Date td) {
 	return 0;
 }
 
-static TZ_Record process_rrule(TZ_RRule rrule, int64_t cur) {
-	if (!rrule.has_dst) {
+static TZ_Record process_rrule(TZ_RRule *rrule, int64_t cur) {
+	if (!rrule->has_dst) {
 		return (TZ_Record){
 			.time = cur,
-			.utc_offset = rrule.std_offset,
-			.shortname  = rrule.std_name,
+			.utc_offset = rrule->std_offset,
+			.shortname  = rrule->std_name,
 			.dst        = false,
 		};
 	}
 
 	TZ_Date date = tz_get_date((TZ_Time){.time = cur, .tz = NULL});
-	int64_t std_secs = trans_date_to_seconds(date.year, rrule.std_date);
-	int64_t dst_secs = trans_date_to_seconds(date.year, rrule.dst_date);
+	int64_t std_secs = trans_date_to_seconds(date.year, rrule->std_date);
+	int64_t dst_secs = trans_date_to_seconds(date.year, rrule->dst_date);
 
 	TZ_Record records[] = {
 		{
 			.time = std_secs,
-			.utc_offset = rrule.std_offset,
-			.shortname = rrule.std_name,
+			.utc_offset = rrule->std_offset,
+			.shortname = rrule->std_name,
 			.dst = false,
 		},
 		{
 			.time = dst_secs,
-			.utc_offset = rrule.dst_offset,
-			.shortname = rrule.dst_name,
+			.utc_offset = rrule->dst_offset,
+			.shortname = rrule->dst_name,
 			.dst = true,
 		}
 	};
@@ -1392,7 +1383,7 @@ static TZ_Record process_rrule(TZ_RRule rrule, int64_t cur) {
 
 static TZ_Record region_get_nearest(TZ_Region *tz, int64_t tm) {
 	if (tz->record_count == 0) {
-		return process_rrule(tz->rrule, tm);
+		return process_rrule(&tz->rrule, tm);
 	}
 
 	int64_t n = tz->record_count;
@@ -1400,7 +1391,7 @@ static TZ_Record region_get_nearest(TZ_Region *tz, int64_t tm) {
 	int64_t tm_sec = tm;
 	int64_t last_time = tz->records[tz->record_count-1].time;
 	if (tm_sec > last_time) {
-		return process_rrule(tz->rrule, tm);
+		return process_rrule(&tz->rrule, tm);
 	}
 
 	int64_t left = 0;

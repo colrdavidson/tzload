@@ -22,11 +22,11 @@ typedef struct {
 typedef struct {
 	bool has_dst;
 
-	char *std_name;
+	char std_name[33];
 	int64_t std_offset;
 	TZ_Transition_Date std_date;
 
-	char *dst_name;
+	char dst_name[33];
 	int64_t dst_offset;
 	TZ_Transition_Date dst_date;
 } TZ_RRule;
