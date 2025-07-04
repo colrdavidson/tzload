@@ -21,6 +21,13 @@
 
 #include "libtz.h"
 
+#define ARR_LEN(x) (sizeof(x) / sizeof(*(x)))
+#define NTOH_64(x) __builtin_bswap64(x)
+#define NTOH_32(x) __builtin_bswap32(x)
+#define NTOH_16(x) __builtin_bswap16(x)
+
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+
 // SECTION: Platform-specific Utilities
 #if defined(PLATFORM_WINDOWS)
 static bool open_file(FILE **file, char *filename, char *mode) {
@@ -79,13 +86,6 @@ static bool open_file(FILE **file, char *filename, char *mode) {
 #endif
 
 // SECTION: Utilities
-#define ARR_LEN(x) (sizeof(x) / sizeof(*(x)))
-#define NTOH_64(x) __builtin_bswap64(x)
-#define NTOH_32(x) __builtin_bswap32(x)
-#define NTOH_16(x) __builtin_bswap16(x)
-
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
-
 static char *clonestr(char *str) {
 	size_t len = strlen(str);
 	char *out = (char *)malloc(len+1);
